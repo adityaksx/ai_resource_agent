@@ -259,14 +259,42 @@ def deduplicate(
 
 def split_sentences(text: str, min_len: int = 15) -> list[str]:
     """
-    Split text into sentences. Handles common abbreviations
-    to avoid false splits (Mr., Dr., U.S., etc.).
+    Split text into sentences.
+    Uses a two-pass approach:
+      1. Protect common abbreviations by temporarily replacing their dots
+      2. Split on sentence-ending punctuation
+      3. Restore abbreviations
     """
-    # Protect common abbreviations
-    abbrevs = r"(?<!\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|approx|est|vol|p|pp|fig|no)\b)"
-    pattern = abbrevs + r"(?<=[.!?])\s+"
-    parts = re.split(pattern, text)
-    return [s.strip() for s in parts if len(s.strip()) >= min_len]
+    if not text:
+        return []
+
+    # ── Step 1: protect abbreviation dots ────────
+    ABBREVS = [
+        "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr",
+        "vs", "etc", "approx", "est", "vol", "fig",
+        "no", "p", "pp", "e.g", "i.e", "Jan", "Feb",
+        "Mar", "Apr", "Jun", "Jul", "Aug", "Sep", "Oct",
+        "Nov", "Dec", "U.S", "U.K",
+    ]
+    PLACEHOLDER = "<<DOT>>"
+    protected = text
+    for abbr in ABBREVS:
+        # Replace "Mr." but not at end of sentence
+        protected = protected.replace(f"{abbr}.", f"{abbr}{PLACEHOLDER}")
+
+    # ── Step 2: split on . ! ? followed by whitespace ──
+    # Simple fixed-width lookbehind — always valid in Python re
+    parts = re.split(r"(?<=[.!?])\s+", protected)
+
+    # ── Step 3: restore dots + filter short sentences ──
+    sentences = []
+    for part in parts:
+        restored = part.replace(PLACEHOLDER, ".").strip()
+        if len(restored) >= min_len:
+            sentences.append(restored)
+
+    return sentences
+
 
 
 # ─────────────────────────────────────────────
