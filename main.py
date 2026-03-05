@@ -4,11 +4,11 @@ main.py
 Central router for the AI Resource Agent.
 
 Handles four input types:
-  1. URL / link        → detect source → processor → clean → LLM
-  2. Plain text / note → text_processor → clean → LLM
-  3. Local image       → image_processor (OCR) → clean → LLM
-  4. Local file        → appropriate processor → clean → LLM
-  5. Mixed input       → all of the above combined in one call
+1. URL / link  → detect source → processor → clean → LLM
+2. Plain text  → text_processor → clean → LLM
+3. Local image → image_processor (OCR) → clean → LLM
+4. Local file  → appropriate processor → clean → LLM
+5. Mixed input → all of the above combined in one call
 """
 
 from __future__ import annotations
@@ -18,13 +18,12 @@ import json
 import logging
 from pathlib import Path
 
-from utils.source_detector  import detect_source
-from utils.cleaner          import clean_processor_output
-from llm.prompt_builder     import build_summary_prompt
-from llm.summarizer         import summarize
-from database.db            import save_resource, init_db
+from utils.source_detector      import detect_source
+from utils.cleaner              import clean_processor_output
+from llm.summarizer             import summarize_data, call_llm   # ← FIXED: no longer import build_summary_prompt or summarize
+from database.db                import save_resource, init_db
 
-# ── Processors ──────────────────────────────
+# ── Processors ──────────────────────────────────────────────────────────────
 from processors.youtube_processor   import process_youtube
 from processors.github_processor    import process_github
 from processors.web_processor       import process_web
@@ -34,8 +33,7 @@ from processors.image_processor     import process_image
 
 logger = logging.getLogger(__name__)
 
-# Source types that should NEVER reach process_link
-# (they are local files, handled by process_local_file)
+# Source types that should NEVER reach process_link (local files only)
 _LOCAL_SOURCE_TYPES = {
     "local_image", "local_video", "local_audio",
     "pdf_document", "word_document", "spreadsheet",
@@ -57,7 +55,6 @@ _WEB_SOURCE_TYPES = {
 
 
 def _safe_json(obj) -> str:
-    """Safely serialize any object to JSON string for DB storage."""
     try:
         return json.dumps(obj, ensure_ascii=False, default=str)
     except Exception:
@@ -72,10 +69,9 @@ def _save(
     raw_data:     dict | None = None,
     cleaned_data: dict | None = None,
     llm_output:   str  | None = None,
-    status:       str         = "success",
+    status:       str        = "success",
     error:        str  | None = None,
 ):
-    """Wrapper around save_resource with safe JSON serialization."""
     try:
         save_resource(
             source       = source,
@@ -92,29 +88,24 @@ def _save(
         logger.error(f"DB save failed: {e}")
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # SINGLE URL
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def process_link(url: str) -> str:
-    """
-    Process a single URL and return an LLM summary string.
-    Detects source type and routes to the correct processor.
-    """
     if not url or not url.strip():
         return "No URL provided."
 
     url    = url.strip()
     source = detect_source(url)
 
-    # Guard: never route local file paths through this function
     if source in _LOCAL_SOURCE_TYPES:
         return f"'{url}' looks like a local file. Use process_image_input() or process_local_file() instead."
 
     raw_data = None
 
     try:
-        # ── Route to processor ────────────────────
+        # ── Route to correct processor ────────────────────────────────────
         if source.startswith("youtube"):
             raw_data = process_youtube(url)
 
@@ -128,17 +119,14 @@ def process_link(url: str) -> str:
             raw_data = process_web(url)
 
         else:
-            # Catch-all fallback
             raw_data = process_web(url)
 
-        # Guard: processor returned None or empty
         if not raw_data:
             raise ValueError(f"Processor returned empty data for source '{source}'")
 
-        # ── Clean → Prompt → LLM ──────────────────
+        # ── Clean → LLM (FIXED: no prompt building here) ─────────────────
         cleaned    = clean_processor_output(raw_data)
-        prompt     = build_summary_prompt(cleaned)
-        llm_output = summarize(prompt)
+        llm_output = summarize_data(cleaned)             # ✅ summarizer owns prompt building
 
         _save(
             source       = source,
@@ -164,15 +152,11 @@ def process_link(url: str) -> str:
         return f"Error processing link: {e}"
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # PLAIN TEXT
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def process_text_input(text: str) -> str:
-    """
-    Process plain user-typed or pasted text and return an LLM summary.
-    Handles notes, code snippets, JSON, markdown etc.
-    """
     if not text or not text.strip():
         return "No text provided."
 
@@ -181,8 +165,7 @@ def process_text_input(text: str) -> str:
     try:
         raw_data   = process_text(text)
         cleaned    = clean_processor_output(raw_data)
-        prompt     = build_summary_prompt(cleaned)
-        llm_output = summarize(prompt)
+        llm_output = summarize_data(cleaned)             # ✅ FIXED: was summarize(prompt)
 
         _save(
             source       = raw_data.get("source_type", "plain_text"),
@@ -200,15 +183,11 @@ def process_text_input(text: str) -> str:
         return f"Error processing text: {e}"
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # IMAGE
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def process_image_input(image_path: str) -> str:
-    """
-    Run OCR on a local image file and return an LLM summary.
-    Accepts absolute or relative paths.
-    """
     image_path = str(Path(image_path).resolve())
 
     if not os.path.exists(image_path):
@@ -217,8 +196,7 @@ def process_image_input(image_path: str) -> str:
     try:
         raw_data   = process_image(image_path)
         cleaned    = clean_processor_output(raw_data)
-        prompt     = build_summary_prompt(cleaned)
-        llm_output = summarize(prompt)
+        llm_output = summarize_data(cleaned)             # ✅ FIXED: was summarize(prompt)
 
         _save(
             source       = "local_image",
@@ -236,20 +214,11 @@ def process_image_input(image_path: str) -> str:
         return f"Error processing image '{Path(image_path).name}': {e}"
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # LOCAL FILE (PDF, code, audio, etc.)
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def process_local_file(file_path: str) -> str:
-    """
-    Process a local non-image file.
-    Currently routes:
-      - local_image        → process_image_input (OCR)
-      - plain_text_file /
-        code_file /
-        notebook           → process_text_input (read + summarise)
-      - others             → read as text best-effort
-    """
     file_path = str(Path(file_path).resolve())
 
     if not os.path.exists(file_path):
@@ -260,8 +229,7 @@ def process_local_file(file_path: str) -> str:
     if source == "local_image":
         return process_image_input(file_path)
 
-    if source in ("plain_text_file", "code_file", "notebook",
-                  "data_file", "pdf_document"):
+    if source in ("plain_text_file", "code_file", "notebook", "data_file", "pdf_document"):
         try:
             text = Path(file_path).read_text(encoding="utf-8", errors="replace")
             return process_text_input(text)
@@ -271,37 +239,28 @@ def process_local_file(file_path: str) -> str:
     return f"Unsupported local file type: {source} ({Path(file_path).name})"
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # MIXED INPUT  ← called by FastAPI /chat
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def process_input(
-    text:        str       = "",
-    image_paths: list[str] = None,
+    text:        str        = "",
+    image_paths: list[str]  = None,
 ) -> str:
-    """
-    Main entry point for the web UI.
-
-    Accepts any combination of:
-      - Free text  (may include multiple URLs on separate lines)
-      - Uploaded image file paths
-
-    Returns a single combined LLM response string.
-    """
     image_paths = [p for p in (image_paths or []) if p]
     parts       = []
 
-    # ── 1. Split text into URLs vs plain text ──
+    # ── 1. Split text into URLs vs plain text ────────────────────────────
     lines     = [l.strip() for l in (text or "").splitlines() if l.strip()]
     urls      = [
         l for l in lines
         if (l.startswith("http://") or l.startswith("https://"))
-           and not os.path.exists(l)   # never treat a local path as URL
+        and not os.path.exists(l)
     ]
     plain     = [l for l in lines if l not in urls]
     plain_str = "\n".join(plain).strip()
 
-    # ── 2. Process each URL ──────────────────────
+    # ── 2. Process each URL ──────────────────────────────────────────────
     for url in urls:
         try:
             result = process_link(url)
@@ -309,7 +268,7 @@ def process_input(
         except Exception as e:
             parts.append(f"[{url}]\nError: {e}")
 
-    # ── 3. Process plain text ────────────────────
+    # ── 3. Process plain text ────────────────────────────────────────────
     if plain_str:
         try:
             result = process_text_input(plain_str)
@@ -317,7 +276,7 @@ def process_input(
         except Exception as e:
             parts.append(f"[Text Note]\nError: {e}")
 
-    # ── 4. Process uploaded images ───────────────
+    # ── 4. Process uploaded images ───────────────────────────────────────
     for img_path in image_paths:
         fname = Path(img_path).name
         try:
@@ -329,30 +288,29 @@ def process_input(
         except Exception as e:
             parts.append(f"[Image: {fname}]\nError: {e}")
 
-    # ── 5. Nothing provided ──────────────────────
+    # ── 5. Nothing provided ──────────────────────────────────────────────
     if not parts:
         return "Nothing to process. Please provide a link, text, or image."
 
-    # ── 6. Single input — return directly ────────
+    # ── 6. Single input — return directly ───────────────────────────────
     if len(parts) == 1:
         return parts[0].split("\n", 1)[-1].strip()
 
-    # ── 7. Multiple inputs — unify with LLM ──────
+    # ── 7. Multiple inputs — merge with LLM ─────────────────────────────
     combined_prompt = (
         "The user provided multiple resources. "
         "Summarise each one briefly, then give a combined insight:\n\n"
         + "\n\n---\n\n".join(parts)
     )
     try:
-        return summarize(combined_prompt)
+        return call_llm(combined_prompt)                 # ✅ FIXED: was summarize(combined_prompt)
     except Exception:
-        # Fallback: join raw parts if LLM fails
         return "\n\n---\n\n".join(parts)
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # CLI ENTRY
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import sys
@@ -378,7 +336,6 @@ if __name__ == "__main__":
         if user_input.lower() == "exit":
             break
 
-        # Auto-detect input type
         p = Path(user_input)
         if p.exists() and p.suffix.lower() in IMAGE_EXTS:
             result = process_image_input(user_input)
