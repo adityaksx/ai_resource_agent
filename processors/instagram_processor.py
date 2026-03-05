@@ -1,102 +1,121 @@
-import yt_dlp
 import re
+import yt_dlp
 
 
 # -------------------------
-# Extract instagram metadata
+# Clean a single comment
 # -------------------------
 
-def get_instagram_metadata(url):
+def clean_text(text: str) -> str:
+    text = text.strip()
+    text = re.sub(r"http\S+", "", text)           # remove URLs
+    text = re.sub(r"[^\w\s,.!?'@#-]", "", text)  # remove emojis/junk, keep punctuation
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
-    ydl_opts = {
-        "quiet": True,
-        "skip_download": True
-    }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-
-        info = ydl.extract_info(url, download=False)
-
-        data = {
-            "caption": info.get("description"),
-            "title": info.get("title"),
-            "uploader": info.get("uploader"),
-            "comments": []
-        }
-
-        # collect comments if available
-        if "comments" in info and info["comments"]:
-
-            for c in info["comments"]:
-                if c.get("text"):
-                    data["comments"].append(c["text"])
-
-        return data
+def is_meaningful(text: str) -> bool:
+    """Filter out very short, emoji-only, or spammy comments."""
+    words = text.split()
+    return len(words) >= 4   # at least 4 real words
 
 
 # -------------------------
-# Clean comments
+# Get top meaningful comments
 # -------------------------
 
-def clean_comments(comments):
+def get_top_comments(raw_comments: list, max_count: int = 10) -> list:
+    seen = set()
+    result = []
 
-    cleaned = []
+    for comment in raw_comments:
+        cleaned = clean_text(comment)
+        key = cleaned.lower().strip()
 
-    for comment in comments:
-
-        c = comment.strip()
-
-        if len(c) < 5:
+        if not cleaned or key in seen:
+            continue
+        if not is_meaningful(cleaned):
             continue
 
-        # remove emojis / junk
-        c = re.sub(r"[^\w\s]", "", c)
+        seen.add(key)
+        result.append(cleaned)
 
-        cleaned.append(c)
+        if len(result) >= max_count:
+            break
 
-    return cleaned
+    return result
 
 
 # -------------------------
-# AI-style unique filtering
+# yt-dlp metadata extraction
 # -------------------------
 
-def unique_comments(comments):
+def get_instagram_metadata(url: str) -> dict | None:
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": False,
+        "getcomments": True,
+        "extractor_args": {
+            "instagram": {
+                "max_comments": ["30"],   # fetch 30, filter to 10
+            }
+        },
+    }
 
-    seen = set()
-    unique = []
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
 
-    for comment in comments:
+        if not info:
+            print(f"[instagram_processor] No info returned for: {url}")
+            return None
 
-        key = comment.lower()
+        raw_comments = []
+        for c in (info.get("comments") or []):
+            text = (c.get("text") or "").strip()
+            if text:
+                raw_comments.append(text)
 
-        if key not in seen:
-            seen.add(key)
-            unique.append(comment)
+        return {
+            "title": info.get("title") or "",
+            "caption": info.get("description") or "",
+            "uploader": info.get("uploader") or "",
+            "likes": info.get("like_count"),
+            "raw_comments": raw_comments,
+        }
 
-    return unique
+    except yt_dlp.utils.DownloadError as e:
+        print(f"[instagram_processor] yt-dlp download error: {e}")
+        return None
+    except Exception as e:
+        print(f"[instagram_processor] Unexpected error: {e}")
+        return None
 
 
 # -------------------------
 # Main processor
 # -------------------------
 
-def process_instagram(url):
-
+def process_instagram(url: str) -> dict | None:
+    """
+    Extracts caption, uploader, and top meaningful comments
+    from an Instagram post, reel, or story URL.
+    """
     data = get_instagram_metadata(url)
 
-    caption = data.get("caption", "")
-    title = data.get("title", "")
+    if not data:
+        return None
 
-    comments = data.get("comments", [])
-
-    comments = clean_comments(comments)
-
-    comments = unique_comments(comments)
+    caption = clean_text(data.get("caption", ""))
+    top_comments = get_top_comments(data.get("raw_comments", []), max_count=10)
 
     return {
-        "title": title,
+        "url": url,
+        "title": data.get("title", ""),
         "caption": caption,
-        "description": caption,
-        "unique_comments": comments[:50]
+        "uploader": data.get("uploader", ""),
+        "likes": data.get("likes"),
+        "top_comments": top_comments,    # 10 meaningful, unique, clean comments
     }
