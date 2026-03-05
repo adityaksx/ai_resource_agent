@@ -1,57 +1,38 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>AI Resource Agent</title>
-    <style>
-        body {
-            font-family: Arial;
-            margin: 40px;
-            background: #f4f4f4;
-        }
 
-        input {
-            width: 60%;
-            padding: 10px;
-        }
+<title>AI Resource Agent</title>
 
-        button {
-            padding: 10px 20px;
-        }
+<link rel="stylesheet" href="/static/style.css">
 
-        #result {
-            margin-top: 30px;
-            background: white;
-            padding: 20px;
-        }
-    </style>
 </head>
+
 <body>
 
-<h2>AI Resource Agent</h2>
+<div class="container">
 
-<input id="url" placeholder="Paste resource link">
-<button onclick="process()">Analyze</button>
+<div class="sidebar">
+<h2>AI Agent</h2>
+</div>
 
-<div id="result"></div>
+<div class="chat-area">
 
-<script>
+<div id="messages" class="messages"></div>
 
-async function process(){
+<div class="input-area">
 
-    const url = document.getElementById("url").value
+<input id="user-input" placeholder="Paste resource link..." />
 
-    const res = await fetch("/process",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({url:url})
-    })
+<button onclick="send()">Send</button>
 
-    const data = await res.json()
+</div>
 
-    document.getElementById("result").innerText = data.result
-}
+</div>
 
-</script>
+</div>
+
+<script src="/static/chat.js"></script>
 
 </body>
 </html>

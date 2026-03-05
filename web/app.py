@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import sys
@@ -10,21 +10,22 @@ from main import process_link
 
 app = FastAPI()
 
-templates = Jinja2Templates(directory="web/templates")
+app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
 
-class URLRequest(BaseModel):
-    url: str
+class Message(BaseModel):
+    message: str
 
 
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+def home():
+    with open("web/templates/chat.html") as f:
+        return f.read()
 
 
-@app.post("/process")
-def process(data: URLRequest):
+@app.post("/chat")
+def chat(msg: Message):
 
-    result = process_link(data.url)
+    result = process_link(msg.message)
 
-    return {"result": result}
+    return {"response": result}
