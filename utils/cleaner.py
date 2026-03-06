@@ -1,15 +1,28 @@
 """
-cleaner.py
-----------
+utils/cleaner.py
+----------------
 Cleans and normalises raw text extracted from any source before
 it is passed to the LLM.
+
+Responsibilities (this file only):
+  - Clean raw text strings (unicode, HTML, boilerplate, whitespace)
+  - Deduplicate near-identical sentences
+  - Split text into sentences
+  - Trim to token budget
+  - Clean processor output dicts field-by-field
+
+Does NOT:
+  - Build LLM prompts         → llm/prompt_builder.py
+  - Call the LLM              → llm/summarizer.py
+  - Detect source type        → utils/source_detector.py
+  - Run multi-stage pipeline  → llm/pipeline.py
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -19,24 +32,25 @@ from typing import Optional
 
 @dataclass
 class CleanConfig:
-    remove_urls:       bool  = True
-    remove_hashtags:   bool  = True
-    remove_emojis:     bool  = False
-    remove_html_tags:  bool  = True
-    fix_unicode:       bool  = True
-    normalize_spaces:  bool  = True
-    normalize_quotes:  bool  = True
-    dedupe_lines:      bool  = True
-    dedupe_threshold:  float = 0.85
-    min_sentence_len:  int   = 15
-    max_sentences:     int   = 100
-    max_comments:      int   = 30
-    min_comment_len:   int   = 10
-    max_tokens:        Optional[int] = None
-    mode:              str   = "prose"
+    remove_urls:      bool          = True
+    remove_hashtags:  bool          = True
+    remove_emojis:    bool          = False   # keep by default — useful context
+    remove_html_tags: bool          = True
+    fix_unicode:      bool          = True
+    normalize_spaces: bool          = True
+    normalize_quotes: bool          = True
+    dedupe_lines:     bool          = True
+    dedupe_threshold: float         = 0.85    # Jaccard similarity threshold
+    min_sentence_len: int           = 15      # chars — shorter sentences dropped
+    max_sentences:    int           = 100
+    max_comments:     int           = 30
+    min_comment_len:  int           = 10
+    max_tokens:       Optional[int] = None    # rough: 1 token ≈ 4 chars
+    mode:             str           = "prose" # prose | transcript | code | ocr | social
 
 
-CONFIGS = {
+# Preset configs — used by clean(mode=...) and clean_processor_output()
+CONFIGS: dict[str, CleanConfig] = {
     "prose":      CleanConfig(mode="prose"),
     "transcript": CleanConfig(mode="transcript", remove_urls=True,
                               remove_hashtags=False, max_sentences=200),
@@ -62,8 +76,8 @@ class CleanResult:
     original_chars:     int
     cleaned_chars:      int
     sentences:          int
-    duplicates_removed: int   = 0
-    truncated:          bool  = False
+    duplicates_removed: int  = 0
+    truncated:          bool = False
 
     @property
     def compression_ratio(self) -> float:
@@ -71,12 +85,12 @@ class CleanResult:
             return 0.0
         return round(1 - self.cleaned_chars / self.original_chars, 3)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LOW-LEVEL CLEANERS
+# LOW-LEVEL CLEANERS  (private — use clean() or clean_text() externally)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _fix_unicode(text: str) -> str:
@@ -84,6 +98,7 @@ def _fix_unicode(text: str) -> str:
     text = re.sub(r"[\u200b\u200c\u200d\ufeff\u00ad]", "", text)
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
     return text
+
 
 def _normalize_quotes(text: str) -> str:
     replacements = {
@@ -96,6 +111,7 @@ def _normalize_quotes(text: str) -> str:
         text = text.replace(smart, straight)
     return text
 
+
 def _remove_html(text: str) -> str:
     text = re.sub(r"<[^>]+>", " ", text)
     entities = {
@@ -106,11 +122,14 @@ def _remove_html(text: str) -> str:
         text = text.replace(ent, char)
     return text
 
+
 def _remove_urls(text: str) -> str:
     return re.sub(r"https?://\S+|www\.\S+", "", text)
 
+
 def _remove_hashtags(text: str) -> str:
     return re.sub(r"#\w+", "", text)
+
 
 def _remove_emojis(text: str) -> str:
     emoji_pattern = re.compile(
@@ -123,9 +142,10 @@ def _remove_emojis(text: str) -> str:
         "\U0001F900-\U0001F9FF"
         "\U00002600-\U000026FF"
         "]+",
-        flags=re.UNICODE
+        flags=re.UNICODE,
     )
     return emoji_pattern.sub("", text)
+
 
 def _normalize_whitespace(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -134,12 +154,16 @@ def _normalize_whitespace(text: str) -> str:
     text = re.sub(r" *\n *", "\n", text)
     return text.strip()
 
+
 def _remove_vtt_artifacts(text: str) -> str:
-    text = re.sub(r"\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}", "", text)
+    text = re.sub(
+        r"\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}", "", text
+    )
     text = re.sub(r"^\d+$", "", text, flags=re.MULTILINE)
     text = re.sub(r"^WEBVTT.*$", "", text, flags=re.MULTILINE)
     text = re.sub(r"<[^>]+>", "", text)
     return text
+
 
 def _remove_boilerplate(text: str) -> str:
     patterns = [
@@ -165,10 +189,20 @@ def _jaccard(a: str, b: str) -> float:
         return 1.0
     return len(sa & sb) / len(sa | sb)
 
-def deduplicate(lines: list[str], threshold: float = 0.85) -> tuple[list[str], int]:
+
+def deduplicate(
+    lines: list[str],
+    threshold: float = 0.85,
+) -> tuple[list[str], int]:
+    """
+    Remove near-duplicate lines using Jaccard similarity.
+    Returns (deduped_lines, num_removed).
+    Public — can be imported by other modules if needed.
+    """
     seen:   list[str] = []
     result: list[str] = []
     removed = 0
+
     for line in lines:
         stripped = line.strip()
         if not stripped:
@@ -179,6 +213,7 @@ def deduplicate(lines: list[str], threshold: float = 0.85) -> tuple[list[str], i
         else:
             seen.append(stripped)
             result.append(line)
+
     return result, removed
 
 
@@ -186,26 +221,35 @@ def deduplicate(lines: list[str], threshold: float = 0.85) -> tuple[list[str], i
 # SENTENCE SPLITTING
 # ─────────────────────────────────────────────────────────────────────────────
 
+_ABBREVS = [
+    "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr",
+    "vs", "etc", "approx", "est", "vol", "fig",
+    "no", "p", "pp", "e.g", "i.e", "Jan", "Feb",
+    "Mar", "Apr", "Jun", "Jul", "Aug", "Sep", "Oct",
+    "Nov", "Dec", "U.S", "U.K",
+]
+_DOT_PLACEHOLDER = "<DOT>"   # must be non-empty — empty string caused restore bug
+
+
 def split_sentences(text: str, min_len: int = 15) -> list[str]:
+    """
+    Split text into sentences, protecting common abbreviations.
+    Public — used by clean_text() and can be imported externally.
+    """
     if not text:
         return []
-    ABBREVS = [
-        "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr",
-        "vs", "etc", "approx", "est", "vol", "fig",
-        "no", "p", "pp", "e.g", "i.e", "Jan", "Feb",
-        "Mar", "Apr", "Jun", "Jul", "Aug", "Sep", "Oct",
-        "Nov", "Dec", "U.S", "U.K",
-    ]
-    PLACEHOLDER = "<DOT>"
+
     protected = text
-    for abbr in ABBREVS:
-        protected = protected.replace(f"{abbr}.", f"{abbr}{PLACEHOLDER}")
-    parts = re.split(r"(?<=[.!?])\s+", protected)
+    for abbr in _ABBREVS:
+        protected = protected.replace(f"{abbr}.", f"{abbr}{_DOT_PLACEHOLDER}")
+
+    parts     = re.split(r"(?<=[.!?])\s+", protected)
     sentences = []
     for part in parts:
-        restored = part.replace(PLACEHOLDER, ".").strip()
+        restored = part.replace(_DOT_PLACEHOLDER, ".").strip()
         if len(restored) >= min_len:
             sentences.append(restored)
+
     return sentences
 
 
@@ -214,13 +258,21 @@ def split_sentences(text: str, min_len: int = 15) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def trim_to_token_budget(text: str, max_tokens: int) -> tuple[str, bool]:
+    """
+    Trim text to approximately max_tokens (1 token ≈ 4 chars).
+    Trims at sentence boundary where possible.
+    Returns (trimmed_text, was_truncated).
+    Public — summarizer.py can import this if needed.
+    """
     max_chars = max_tokens * 4
     if len(text) <= max_chars:
         return text, False
+
     chunk      = text[:max_chars]
     last_break = max(chunk.rfind(". "), chunk.rfind(".\n"))
     if last_break > max_chars * 0.7:
         chunk = chunk[:last_break + 1]
+
     return chunk.strip(), True
 
 
@@ -229,23 +281,30 @@ def trim_to_token_budget(text: str, max_tokens: int) -> tuple[str, bool]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def clean_text(text: str, config: CleanConfig | None = None) -> CleanResult:
+    """
+    Full cleaning pipeline for a single text string.
+    Returns a CleanResult dataclass (str-compatible via __str__).
+    """
     if not text or not isinstance(text, str):
         return CleanResult(text="", mode="prose",
                            original_chars=0, cleaned_chars=0, sentences=0)
 
-    cfg           = config or CleanConfig()
+    cfg            = config or CleanConfig()
     original_chars = len(text)
 
+    # Step 1: Unicode + encoding
     if cfg.fix_unicode:
         text = _fix_unicode(text)
     if cfg.normalize_quotes:
         text = _normalize_quotes(text)
+
+    # Step 2: Format-specific pre-cleaning
     if cfg.mode == "transcript":
         text = _remove_vtt_artifacts(text)
     if cfg.remove_html_tags:
         text = _remove_html(text)
 
-    # Code mode — skip destructive cleaning
+    # Step 3: Code mode — skip destructive cleaning, return early
     if cfg.mode == "code":
         if cfg.normalize_spaces:
             text = _normalize_whitespace(text)
@@ -255,25 +314,37 @@ def clean_text(text: str, config: CleanConfig | None = None) -> CleanResult:
             sentences=len(text.splitlines()),
         )
 
+    # Step 4: Content removal
     if cfg.remove_urls:
         text = _remove_urls(text)
     if cfg.remove_hashtags:
         text = _remove_hashtags(text)
     if cfg.remove_emojis:
         text = _remove_emojis(text)
+
+    # Step 5: Boilerplate (prose + social only)
     if cfg.mode in ("prose", "social"):
         text = _remove_boilerplate(text)
+
+    # Step 6: Whitespace
     if cfg.normalize_spaces:
         text = _normalize_whitespace(text)
 
+    # Step 7: Sentence split + length filter
     sentences = split_sentences(text, min_len=cfg.min_sentence_len)
+
+    # Step 8: Deduplication
     duplicates_removed = 0
     if cfg.dedupe_lines and sentences:
-        sentences, duplicates_removed = deduplicate(sentences, threshold=cfg.dedupe_threshold)
+        sentences, duplicates_removed = deduplicate(
+            sentences, threshold=cfg.dedupe_threshold
+        )
 
+    # Step 9: Sentence cap
     sentences = sentences[:cfg.max_sentences]
     text      = " ".join(sentences)
 
+    # Step 10: Token budget
     truncated = False
     if cfg.max_tokens:
         text, truncated = trim_to_token_budget(text, cfg.max_tokens)
@@ -287,7 +358,20 @@ def clean_text(text: str, config: CleanConfig | None = None) -> CleanResult:
     )
 
 
-def clean(text: str, mode: str = "prose", max_tokens: Optional[int] = None, **overrides) -> CleanResult:
+def clean(
+    text:       str,
+    mode:       str          = "prose",
+    max_tokens: Optional[int] = None,
+    **overrides,
+) -> CleanResult:
+    """
+    Convenience wrapper. Use mode= to select preset config.
+    Extra kwargs override individual CleanConfig fields.
+
+    Usage:
+        result = clean(raw_text, mode="transcript", max_tokens=3000)
+        print(result.text)
+    """
     cfg = CleanConfig(**{
         **CONFIGS.get(mode, CONFIGS["prose"]).__dict__,
         **({"max_tokens": max_tokens} if max_tokens else {}),
@@ -300,31 +384,42 @@ def clean(text: str, mode: str = "prose", max_tokens: Optional[int] = None, **ov
 # COMMENTS CLEANER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def clean_comments(comments: list[str], config: CleanConfig | None = None) -> list[str]:
+def clean_comments(
+    comments: list[str],
+    config:   CleanConfig | None = None,
+) -> list[str]:
+    """
+    Clean and deduplicate a list of social media comments.
+    Returns filtered list of clean comment strings.
+    Called by clean_processor_output() for 'comments' / 'unique_comments' fields.
+    """
     cfg     = config or CONFIGS["social"]
     cleaned = []
+
     for c in comments:
         if not c or not isinstance(c, str):
             continue
         result = clean_text(c.strip(), config=cfg)
         if result.cleaned_chars >= cfg.min_comment_len:
             cleaned.append(result.text)
+
     deduped, _ = deduplicate(cleaned, threshold=cfg.dedupe_threshold)
     return deduped[:cfg.max_comments]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PROCESSOR OUTPUT CLEANER
+# PROCESSOR OUTPUT CLEANER  ← main entry point called by main.py
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Metadata fields — pass through unchanged, never clean these
-# FIXED: source_type="github_repo" was being filtered out (only 10 chars, below min_sentence_len=15)
-_SKIP_CLEAN_FIELDS = {
+# Metadata fields — pass through raw, NEVER clean these.
+# Bug fixed: source_type="github_repo" (10 chars) was being dropped by
+# min_sentence_len=15, breaking model routing in summarizer.py.
+_SKIP_CLEAN_FIELDS: set[str] = {
     "source_type", "url", "video_id", "channel",
     "author", "date", "source", "title",
 }
 
-# Maps field name → cleaning mode
+# Content fields → which clean mode to use
 _FIELD_MODES: dict[str, str] = {
     "content":         "prose",
     "transcript":      "transcript",
@@ -342,40 +437,92 @@ _FIELD_MODES: dict[str, str] = {
     "body":            "prose",
 }
 
-def clean_processor_output(data: dict, max_tokens: Optional[int] = None) -> dict:
+
+def clean_processor_output(
+    data:       dict,
+    max_tokens: Optional[int] = None,
+) -> dict:
     """
     Takes raw output dict from any processor and returns a cleaned,
-    LLM-ready dict. Preserves all keys; cleans text values by field type.
-    Metadata fields (source_type, url, title, etc.) are never cleaned.
+    LLM-ready dict.
+
+    Rules:
+    - Metadata fields (_SKIP_CLEAN_FIELDS) → pass through unchanged
+    - String fields  → cleaned with mode from _FIELD_MODES
+    - List[str]      → comments cleaned with clean_comments(), others joined+prose
+    - Dict fields    → recursively cleaned
+    - Numbers/bools  → passed through unchanged
+
+    Called by: main.py (process_link, process_text_input, process_image_input)
+    NOT called by: prompt_builder, summarizer, pipeline — they receive already-cleaned dicts
     """
-    result = {}
+    result: dict = {}
 
     for key, value in data.items():
-        if not value:
+        if not value and value != 0:   # keep 0 but skip None/""/[]
             continue
 
-        # ── FIXED: never clean metadata fields ────────────────────────────
+        # ── Metadata: never clean ─────────────────────────────────────────
         if key in _SKIP_CLEAN_FIELDS:
             result[key] = value
             continue
 
+        # ── Lists ─────────────────────────────────────────────────────────
         if isinstance(value, list):
             if key in ("comments", "unique_comments"):
                 result[key] = clean_comments(value)
             else:
-                joined     = "\n".join(str(v) for v in value if v)
-                r          = clean(joined, mode="prose", max_tokens=max_tokens)
+                joined      = "\n".join(str(v) for v in value if v)
+                r           = clean(joined, mode="prose", max_tokens=max_tokens)
                 result[key] = r.text
 
+        # ── Strings ───────────────────────────────────────────────────────
         elif isinstance(value, str):
             mode        = _FIELD_MODES.get(key, "prose")
             r           = clean(value, mode=mode, max_tokens=max_tokens)
             result[key] = r.text
 
+        # ── Nested dicts ──────────────────────────────────────────────────
         elif isinstance(value, dict):
             result[key] = clean_processor_output(value, max_tokens=max_tokens)
 
+        # ── Numbers, booleans ─────────────────────────────────────────────
         else:
-            result[key] = value   # numbers, booleans — pass through
+            result[key] = value
 
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI  (python -m utils.cleaner myfile.txt --mode transcript --stats)
+# ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Clean text for LLM input")
+    parser.add_argument("file", help="Text file to clean")
+    parser.add_argument("--mode", default="prose",
+                        choices=list(CONFIGS.keys()),
+                        help="Cleaning mode (default: prose)")
+    parser.add_argument("--max-tokens", type=int, default=None,
+                        help="Token budget limit")
+    parser.add_argument("--stats", action="store_true",
+                        help="Show cleaning statistics")
+    args = parser.parse_args()
+
+    raw    = open(args.file, encoding="utf-8").read()
+    result = clean(raw, mode=args.mode, max_tokens=args.max_tokens)
+
+    print(result.text)
+
+    if args.stats:
+        print(f"\n── Stats ──────────────────────────")
+        print(f"Mode             : {result.mode}")
+        print(f"Original chars   : {result.original_chars:,}")
+        print(f"Cleaned chars    : {result.cleaned_chars:,}")
+        print(f"Compression      : {result.compression_ratio:.1%}")
+        print(f"Sentences kept   : {result.sentences}")
+        print(f"Duplicates rm'd  : {result.duplicates_removed}")
+        print(f"Truncated        : {result.truncated}")
