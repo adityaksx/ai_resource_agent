@@ -682,6 +682,19 @@
             </div>`;
         }
 
+        if (item.files) {
+            try {
+                const f = JSON.parse(item.files);
+                if (f.repo_path) {
+                rawHtml += `
+                    <div class="section-label" style="margin-top:16px">Local Repo</div>
+                    <div class="raw-block">
+                    <span class="repo-path">📁 ${esc(f.repo_path)}</span>
+                    </div>`;
+                }
+            } catch(e){}
+        }
+
         // Plain text
         if (ri.text) {
         rawHtml += `
