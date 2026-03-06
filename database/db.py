@@ -2,7 +2,6 @@ import sqlite3
 import json
 from datetime import datetime
 
-
 DB_PATH = "database/resources.db"
 
 
@@ -10,12 +9,17 @@ def get_connection():
     return sqlite3.connect(DB_PATH)
 
 
-def init_db():
+def _add_column_if_missing(cursor, table: str, column: str, coltype: str):
+    cursor.execute(f"PRAGMA table_info({table})")
+    cols = [r[1] for r in cursor.fetchall()]
+    if column not in cols:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
+
+def init_db():
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Main resources table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS resources (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,13 +37,12 @@ def init_db():
     )
     """)
 
+    _add_column_if_missing(cursor, "resources", "vault_title",   "TEXT")
+    _add_column_if_missing(cursor, "resources", "vault_snippet", "TEXT")
+
     conn.commit()
     conn.close()
 
-
-# -------------------------
-# Save new resource
-# -------------------------
 
 def save_resource(
     source,
@@ -51,74 +54,86 @@ def save_resource(
     llm_output=None,
     files=None,
     status="processed",
-    error=None
+    error=None,
+    vault_title=None,
+    vault_snippet=None,
 ):
-
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute(
         """
         INSERT INTO resources
-        (source,url,title,raw_input,raw_data,cleaned_data,llm_output,files,status,error,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        (source, url, title, raw_input, raw_data, cleaned_data,
+         llm_output, files, status, error, created_at, vault_title, vault_snippet)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             source,
             url,
             title,
-            json.dumps(raw_input) if raw_input else None,
-            json.dumps(raw_data) if raw_data else None,
-            json.dumps(cleaned_data) if cleaned_data else None,
+            json.dumps(raw_input, ensure_ascii=False) if isinstance(raw_input, dict) else raw_input,
+            json.dumps(raw_data,  ensure_ascii=False) if isinstance(raw_data,  dict) else raw_data,
+            json.dumps(cleaned_data, ensure_ascii=False) if isinstance(cleaned_data, dict) else cleaned_data,
             llm_output,
-            json.dumps(files) if files else None,
+            json.dumps(files, ensure_ascii=False) if files else None,
             status,
             error,
-            datetime.utcnow().isoformat()
-        )
+            datetime.utcnow().isoformat(),
+            vault_title,
+            vault_snippet,
+        ),
     )
 
     conn.commit()
     conn.close()
 
 
-# -------------------------
-# Fetch past resources
-# -------------------------
-
-def get_resources(limit=20):
-
+def get_resources(limit=200):
     conn = get_connection()
     cursor = conn.cursor()
-
     cursor.execute(
-        "SELECT id,source,url,title,created_at FROM resources ORDER BY id DESC LIMIT ?",
-        (limit,)
+        """
+        SELECT
+          id, source, url, title,
+          raw_input, raw_data, cleaned_data, llm_output,
+          files, status, error, created_at,
+          vault_title, vault_snippet
+        FROM resources
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
     )
-
     rows = cursor.fetchall()
-
     conn.close()
-
     return rows
 
 
-# -------------------------
-# Fetch full resource
-# -------------------------
-
 def get_resource(resource_id):
-
     conn = get_connection()
     cursor = conn.cursor()
-
     cursor.execute(
-        "SELECT * FROM resources WHERE id=?",
-        (resource_id,)
+        """
+        SELECT
+          id, source, url, title,
+          raw_input, raw_data, cleaned_data, llm_output,
+          files, status, error, created_at,
+          vault_title, vault_snippet
+        FROM resources
+        WHERE id=?
+        """,
+        (resource_id,),
     )
-
     row = cursor.fetchone()
-
     conn.close()
-
     return row
+
+
+def delete_resource(resource_id):
+    """Hard-deletes a resource by id."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM resources WHERE id=?", (resource_id,))
+    conn.commit()
+    conn.close()
