@@ -108,6 +108,19 @@ def _safe_json(obj) -> str:
     except Exception:
         return str(obj)
 
+def _make_vault_title(llm_output: str | None, fallback: str) -> str:
+    if llm_output:
+        first = llm_output.strip().splitlines()[0].strip()
+        if 8 <= len(first) <= 80:
+            return first
+    return fallback[:80]
+
+def _make_vault_snippet(llm_output: str | None) -> str | None:
+    if not llm_output:
+        return None
+    s = " ".join(llm_output.strip().split())
+    return s[:160]
+
 
 def _save(
     source:       str,
@@ -120,22 +133,29 @@ def _save(
     status:       str        = "success",
     error:        str  | None = None,
 ) -> None:
-    # _save does DB I/O — keep sync, called with asyncio-safe pattern
     try:
+        # guarantee raw_input is never empty/None
+        if not raw_input:
+            raw_input = {"kind": source}
+
+        vault_title   = _make_vault_title(llm_output, fallback=title or url or source)
+        vault_snippet = _make_vault_snippet(llm_output)
+
         save_resource(
-            source       = source,
-            url          = url,
-            title        = title,
-            raw_input    = _safe_json(raw_input),
-            raw_data     = _safe_json(raw_data)     if raw_data     else None,
-            cleaned_data = _safe_json(cleaned_data) if cleaned_data else None,
-            llm_output   = llm_output,
-            status       = status,
-            error        = error,
+            source        = source,
+            url           = url,
+            title         = title,
+            raw_input     = raw_input,
+            raw_data      = raw_data,
+            cleaned_data  = cleaned_data,
+            llm_output    = llm_output,
+            status        = status,
+            error         = error,
+            vault_title   = vault_title,
+            vault_snippet = vault_snippet,
         )
     except Exception as e:
         logger.error(f"DB save failed: {e}")
-
 
 def _friendly_error(url: str, source: str, err: str) -> str:
     if "empty data" in err:
@@ -327,7 +347,11 @@ async def process_image_input(image_path: str) -> str:
             source       = "local_image",
             url          = None,
             title        = raw_data.get("title", Path(image_path).name),
-            raw_input    = {"image_path": image_path},
+            raw_input    = {
+                "kind":       "local_image",
+                "image_path": image_path,
+                "filename":   Path(image_path).name,
+            },
             raw_data     = raw_data,
             cleaned_data = clean_processor_output(raw_data),
             llm_output   = llm_output,
