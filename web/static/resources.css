@@ -403,3 +403,31 @@ body {
   .modal-header, .modal-body { padding: 18px; }
   .view-toggle { margin-left: 0; }
 }
+
+.session-list{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+.session-item{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:10px;
+  border-radius:8px;
+  background:var(--surface2);
+  cursor:pointer;
+}
+
+.session-item:hover{
+  background:var(--surface);
+}
+
+.session-icon{
+  font-size:18px;
+}
+
+.session-title{
+  font-size:.9rem;
+}
