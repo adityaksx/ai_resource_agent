@@ -7,3 +7,4 @@ database/resources.db
 *.png
 *.json
 /storage/repos
+*.pdf
