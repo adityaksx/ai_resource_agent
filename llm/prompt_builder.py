@@ -393,6 +393,14 @@ def build_summary_prompt(data: dict) -> str:
     instruction   = _SOURCE_INSTRUCTIONS.get(source_type, _DEFAULT_INSTRUCTION)
     output_format = _SOURCE_OUTPUT_FORMAT.get(source_type, _DEFAULT_OUTPUT_FORMAT)
 
+    if source_type == "github_repo" and not data.get("has_readme", True):
+        instruction = (
+            "This GitHub repository has NO README file. "
+            "Summarize STRICTLY from the source files provided below. "
+            "Do NOT invent features, tech stack, or descriptions that are not "
+            "explicitly visible in the files. If something is unclear, say so."
+        )
+
     content_parts: list[str] = []
     seen: set[str] = set()
 
@@ -557,6 +565,21 @@ def build_guidance_prompt(user_input: str, source_type: str) -> str:
 
     Called by: llm/pipeline.py → extract_guidance()
     """
+    if source_type == "github_repo":
+        example = """{
+  "focus_on": ["source files", "package.json", "languages used", "project purpose"],
+  "skip":     ["test files", "CI config", "LICENSE text", "build artifacts"],
+  "infer":    ["target audience", "maturity level", "similar tools"],
+  "context":  "This is a GitHub repository. Summarize from whatever files are available."
+}"""
+    else:
+        example = """{
+  "focus_on": ["README", "tech stack", "project purpose", "installation steps"],
+  "skip":     ["test files", "CI config", "CHANGELOG", "LICENSE text"],
+  "infer":    ["target audience", "maturity level", "similar tools"],
+  "context":  "This is an open source project hosted on GitHub."
+}"""
+
     return f"""You are helping a developer knowledge agent decide what to extract from content.
 
 Source type : {source_type}
@@ -572,12 +595,7 @@ Return ONLY a valid JSON object. No explanation. No markdown.
 }}
 
 Example for github_repo:
-{{
-  "focus_on": ["README", "tech stack", "project purpose", "installation steps"],
-  "skip":     ["test files", "CI config", "CHANGELOG", "LICENSE text"],
-  "infer":    ["target audience", "maturity level", "similar tools"],
-  "context":  "This is an open source project hosted on GitHub."
-}}
+{example}
 """
 
 
