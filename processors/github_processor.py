@@ -323,6 +323,9 @@ def process_github(url: str) -> dict | None:
     overview = ""
     if kind == "repo":
         repo_path = clone_repo(url, repo)
+        files = {}
+        if repo_path:
+            files["repo_path"] = repo_path
         readme    = read_readme(repo_path)
         if readme:
             overview = extract_overview(readme)
@@ -336,18 +339,18 @@ def process_github(url: str) -> dict | None:
 
     return {
         "source_type": f"github_{kind}",
-        "url":         url,
-        "repo":        metadata.get("name",        ""),
-        "owner":       owner,
+        "url": url,
+        "repo": metadata.get("name", ""),
+        "owner": owner,
         "description": metadata.get("description", ""),
-        "language":    metadata.get("language",     ""),
-        "languages":   languages,
-        "stars":       metadata.get("stars",        0),
-        "forks":       metadata.get("forks",        0),
-        "topics":      metadata.get("topics",       []),
-        "license":     metadata.get("license",      ""),
-        "open_issues": metadata.get("open_issues",  0),
-        "updated_at":  metadata.get("updated_at",   ""),
-        "overview":    overview,
-        "has_readme":  bool(readme) if kind == "repo" else False,   # ← ADD THIS
+        "language": metadata.get("language", ""),
+        "languages": languages,
+        "stars": metadata.get("stars", 0),
+        "forks": metadata.get("forks", 0),
+        "topics": metadata.get("topics", []),
+        "license": metadata.get("license", ""),
+        "open_issues": metadata.get("open_issues", 0),
+        "updated_at": metadata.get("updated_at", ""),
+        "overview": overview,
+        "files": files
     }
