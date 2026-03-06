@@ -45,6 +45,9 @@ from processors.instagram_processor import process_instagram
 from processors.text_processor      import process_text
 from processors.image_processor     import process_image
 
+import time
+CURRENT_SESSION_ID = int(time.time())
+
 from dotenv import load_dotenv
 load_dotenv()   
 import os
@@ -132,6 +135,7 @@ def _save(
     llm_output:   str  | None = None,
     status:       str        = "success",
     error:        str  | None = None,
+    session_id: int = CURRENT_SESSION_ID,
 ) -> None:
     try:
         # guarantee raw_input is never empty/None
@@ -178,6 +182,7 @@ def _save(
             error         = error,
             vault_title   = vault_title,
             vault_snippet = vault_snippet,
+            session_id    = session_id,
         )
     except Exception as e:
         logger.error(f"DB save failed: {e}")
