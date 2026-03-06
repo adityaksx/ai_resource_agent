@@ -138,8 +138,32 @@ def _save(
         if not raw_input:
             raw_input = {"kind": source}
 
-        vault_title   = _make_vault_title(llm_output, fallback=title or url or source)
-        vault_snippet = _make_vault_snippet(llm_output)
+        # Better vault metadata generation
+        vault_title = title or url or source
+
+        if raw_data:
+            if raw_data.get("repo"):
+                vault_title = raw_data["repo"]
+
+            elif raw_data.get("title"):
+                vault_title = raw_data["title"]
+
+        vault_snippet = None
+
+        if raw_data:
+            if raw_data.get("description"):
+                vault_snippet = raw_data["description"]
+
+            elif raw_data.get("overview"):
+                vault_snippet = raw_data["overview"][:160]
+
+        # fallback to LLM output if nothing else exists
+        if not vault_snippet:
+            vault_snippet = _make_vault_snippet(llm_output)
+
+        files = None
+        if raw_data and raw_data.get("files"):
+            files = raw_data["files"]
 
         save_resource(
             source        = source,
@@ -149,6 +173,7 @@ def _save(
             raw_data      = raw_data,
             cleaned_data  = cleaned_data,
             llm_output    = llm_output,
+            files         = files,
             status        = status,
             error         = error,
             vault_title   = vault_title,
