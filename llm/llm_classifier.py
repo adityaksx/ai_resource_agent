@@ -53,7 +53,7 @@ _CLASSIFIER_MODEL = "mistral:7b"
 
 _CLASSIFIER_OPTIONS = {
     "temperature": 0.0,    # deterministic — no randomness for classification
-    "num_predict": 120,    # only need ~50 tokens for the JSON response
+    "num_predict": 200,    # only need ~50 tokens for the JSON response
     "top_p":       1.0,
 }
 
@@ -90,25 +90,90 @@ _UNSUPPORTED_SOURCE_TYPES: set[str] = {
 # JSON EXTRACTION HELPER  (unchanged — pure string logic, no async needed)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# REPLACE WITH this brace-walking version (same as pipeline.py):
 def _extract_json(text: str) -> dict:
-    """Safely extract a JSON object from LLM response text."""
+    """
+    Safely extract the FIRST complete JSON object from LLM response text.
+
+    Handles:
+      - Markdown fences (```json ... ```)
+      - Explanation text before or after the JSON
+      - Trailing commas
+      - Literal newlines inside string values
+      - Multiple JSON objects — takes the FIRST complete one
+    """
+    import re as _re
+
+    if not text:
+        return {}
+
     text = text.strip()
+
+    # Strip markdown fences
     if text.startswith("```"):
         lines = text.splitlines()
         text  = "\n".join(l for l in lines if not l.strip().startswith("```"))
 
+    # Find first opening brace
     start = text.find("{")
-    end   = text.rfind("}") + 1
-
-    if start == -1 or end == 0 or end <= start:
-        logger.warning(f"[CLASSIFIER] No JSON object found in response: {text[:100]}")
+    if start == -1:
+        logger.warning(f"[CLASSIFIER] No JSON found in: {text[:100]}")
         return {}
+
+    # ── Walk braces to find the FIRST complete matching } ────────────────
+    depth     = 0
+    end       = -1
+    in_string = False
+    escape    = False
+
+    for i, ch in enumerate(text[start:], start):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+
+    if end == -1:
+        logger.warning(f"[CLASSIFIER] Unmatched braces in: {text[:100]}")
+        return {}
+
+    raw_json = text[start:end]
+
+    # Sanitize literal newlines/control chars inside quoted strings
+    def _fix_string_newlines(m):
+        return m.group(0).replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+
+    raw_json = _re.sub(
+        r'"[^"\\]*(?:\\.[^"\\]*)*"',
+        _fix_string_newlines,
+        raw_json,
+        flags=_re.DOTALL,
+    )
+    raw_json = _re.sub(r'(?<!\\)[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', ' ', raw_json)
 
     try:
-        return json.loads(text[start:end])
-    except json.JSONDecodeError as e:
-        logger.warning(f"[CLASSIFIER] JSON parse error: {e} | text: {text[start:end][:100]}")
-        return {}
+        return json.loads(raw_json)
+    except json.JSONDecodeError:
+        # Try fixing trailing commas as last resort
+        fixed = _re.sub(r",\s*([}\]])", r"\1", raw_json)
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError as e:
+            logger.warning(f"[CLASSIFIER] JSON parse failed: {e} | raw: {raw_json[:100]}")
+            return {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -122,7 +187,12 @@ async def _call_classifier(prompt: str) -> str:
     all Ollama calls across the entire app are serialised.
     """
     payload = {
-        "model":   _CLASSIFIER_MODEL,
+        "model":  _CLASSIFIER_MODEL,
+        "system": (
+            "You are a URL and content classifier. "
+            "Return ONLY a valid JSON object. "
+            "No explanation. No markdown. No extra text before or after the JSON."
+        ),
         "prompt":  prompt,
         "stream":  False,
         "options": _CLASSIFIER_OPTIONS,
