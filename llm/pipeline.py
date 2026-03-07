@@ -73,8 +73,20 @@ def _pipeline_options(source_type: str) -> dict:
         return _PIPELINE_OPTIONS_CODE
     return _PIPELINE_OPTIONS_FAST
 
+# System message per task — passed in from extract_guidance/enrich
+_PIPELINE_SYSTEM: dict[str, str] = {
+    "guidance":   (
+        "Return ONLY a valid JSON object. "
+        "No explanation. No markdown. No extra text before or after the JSON."
+    ),
+    "enrichment": (
+        "You are enriching content metadata. "
+        "Return ONLY a valid JSON object with inferred fields. "
+        "No explanation or markdown."
+    ),
+}
 
-async def _call_pipeline(prompt: str, source_type: str = "") -> str:
+async def _call_pipeline(prompt: str, source_type: str = "", task: str = "guidance") -> str:
     """
     Async Ollama call for pipeline intermediate stages (2 & 3).
     Uses the SAME _ollama_semaphore from summarizer.py — ensures
@@ -90,10 +102,12 @@ async def _call_pipeline(prompt: str, source_type: str = "") -> str:
 
     payload = {
         "model":   model,
+        "system":  _PIPELINE_SYSTEM.get(task, _PIPELINE_SYSTEM["guidance"]),
         "prompt":  prompt,
         "stream":  False,
         "options": options,
     }
+
 
     async with _ollama_semaphore:                        # ← SAME semaphore as summarizer.py
         for attempt in range(3):
@@ -243,7 +257,7 @@ async def extract_guidance(user_input: str, source_type: str) -> dict:
         return _default_guidance()
 
     prompt = build_guidance_prompt(user_input, source_type)
-    raw    = await _call_pipeline(prompt, source_type)          # ← await
+    raw    = await _call_pipeline(prompt, source_type,task="guidance")          # ← await
 
     if not raw:
         logger.warning(f"[S2-GUIDANCE] Empty response for source_type={source_type}")
@@ -317,7 +331,7 @@ async def enrich(cleaned_data: dict, guidance: dict) -> dict:
         return cleaned_data
 
     prompt   = build_enrich_prompt(cleaned_data, guidance)
-    raw      = await _call_pipeline(prompt, source_type)        # ← await
+    raw      = await _call_pipeline(prompt, source_type,task="enrichment")        # ← await
 
     if not raw:
         logger.warning("[S3-ENRICH] Empty response, returning cleaned data unchanged")
@@ -335,6 +349,10 @@ async def enrich(cleaned_data: dict, guidance: dict) -> dict:
         "inferred_difficulty",
         "related_tools",
         "missing_context",
+        "inferred_use_case",      # what someone would use this for
+        "inferred_prerequisites", # what you need to know first
+        "inferred_category",      # e.g. "DevOps tool", "ML paper", "tutorial"
+        "key_entities",           # people, orgs, products mentioned
     }
 
     added = []
