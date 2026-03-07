@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Media Vault · AI Resource Agent</title>
-  <link rel="stylesheet" href="/static/resources.css" />
+  <link rel="stylesheet" href="/static/resources.css?v=2" />
 </head>
 <body>
 
@@ -14,10 +14,10 @@
       <span class="dot">✦</span>
       Resource Agent
     </a>
-    <nav>
+    <div class="nav-links">
       <a href="/">Chat</a>
       <a href="/resources" class="active">Media Vault</a>
-    </nav>
+    </div>
   </nav>
 
   <!-- HERO -->
@@ -71,6 +71,8 @@
         <div class="tabs">
           <button class="tab active" onclick="switchTab('raw',this)">Raw Input</button>
           <button class="tab" onclick="switchTab('answer',this)">LLM Answer</button>
+          <button class="tab-edit-btn" id="editAnswerBtn"
+            onclick="toggleEditAnswer()" title="Edit answer">✏️ Edit</button>
         </div>
         <div class="tab-panel show" id="tab-raw"></div>
         <div class="tab-panel"      id="tab-answer"></div>
@@ -90,6 +92,6 @@
     </div>
   </div>
 
-  <script src="/static/resources.js"></script>
+  <script src="/static/resources.js?v=4"></script>
 </body>
 </html>
