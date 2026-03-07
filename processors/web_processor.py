@@ -357,6 +357,4 @@ async def process_web(url: str) -> dict | None:
         "url":        url,
         "title":      result["title"],
         "content":    content,
-        "word_count": len(content.split()),
-        "truncated":  truncated,
     }
