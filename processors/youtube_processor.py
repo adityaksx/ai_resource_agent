@@ -1,7 +1,17 @@
 import re
+import os
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
+# Whisper model cache — loaded once, reused across calls
+_whisper_model = None
 
+def _get_whisper_model(size: str = "base"):
+    global _whisper_model
+    if _whisper_model is None:
+        import whisper
+        print(f"[youtube_processor] Loading Whisper '{size}' model...")
+        _whisper_model = whisper.load_model(size)
+    return _whisper_model
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VIDEO ID EXTRACTION
@@ -125,21 +135,93 @@ def get_youtube_comments(url: str, max_fetch: int = 30) -> list[str]:
 # STAGE 3 — TRANSCRIPT
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _transcribe_with_whisper(url: str, source_type: str = "youtube_shorts") -> str:
+    """
+    Downloads video, extracts audio, transcribes with Whisper.
+    Only runs for youtube_shorts and instagram_reel — not full videos.
+    Cleans up temp files after transcription.
+    """
+    import tempfile
+
+    # Safety check — only run for short-form content
+    if source_type not in ("youtube_shorts", "instagram_reel"):
+        return ""
+
+    tmp_dir = tempfile.mkdtemp()
+    audio_path = os.path.join(tmp_dir, "audio.mp3")
+
+    try:
+        # Step 1 — Download audio only via yt-dlp
+        print(f"[youtube_processor] Whisper: downloading audio for transcription...")
+        ydl_opts = {
+            "quiet":       True,
+            "format":      "bestaudio/best",
+            "outtmpl":     os.path.join(tmp_dir, "audio.%(ext)s"),
+            "postprocessors": [{
+                "key":            "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "64",   # low quality = faster + smaller
+            }],
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+
+        # Find the downloaded audio file
+        audio_files = [
+            f for f in os.listdir(tmp_dir)
+            if f.endswith(".mp3")
+        ]
+        if not audio_files:
+            print("[youtube_processor] Whisper: no audio file found after download")
+            return ""
+
+        # Safety — skip if audio file is too large (> 25MB = ~30 min video)
+        audio_path = os.path.join(tmp_dir, audio_files[0])
+        file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+        if file_size_mb > 25:
+            print(f"[youtube_processor] Whisper: audio too large ({file_size_mb:.1f}MB), skipping")
+            return ""
+        print(f"[youtube_processor] Whisper: audio size {file_size_mb:.1f}MB")
+        print(f"[youtube_processor] Whisper: transcribing {audio_path}...")
+
+        # Step 2 — Transcribe with Whisper
+        model = _get_whisper_model("base")   # base = fast, good enough for shorts
+        result = model.transcribe(audio_path, fp16=False)
+        text   = result.get("text", "").strip()
+
+        if text:
+            print(f"[youtube_processor] Whisper: {len(text.split())} words transcribed")
+        return text
+
+    except ImportError:
+        print("[youtube_processor] Whisper not installed. Run: pip install openai-whisper")
+        return ""
+    except Exception as e:
+        print(f"[youtube_processor] Whisper transcription failed: {e}")
+        return ""
+    finally:
+        # Step 3 — Always clean up temp files
+        import shutil
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
 def get_transcript(url: str) -> str:
     """
     Priority order:
-      1. Manual English captions
-      2. Manual Hindi captions
-      3. Auto-generated English
-      4. Auto-generated Hindi
-      5. Any available auto-generated language (translated to English)
+      1. Manual English/Hindi captions    (youtube_transcript_api)
+      2. Auto-generated English/Hindi     (youtube_transcript_api)
+      3. Any language translated to EN    (youtube_transcript_api)
+      4. pytubefix captions fallback      (when transcript_api blocked)
     Returns empty string if nothing available.
     """
     video_id = get_video_id(url)
     if not video_id:
         return ""
 
-    # Try manual captions first
+    # ── Attempts 1–3: youtube_transcript_api ─────────────────────────────
     try:
         data = YouTubeTranscriptApi.get_transcript(
             video_id, languages=["en", "hi"]
@@ -148,7 +230,6 @@ def get_transcript(url: str) -> str:
     except Exception:
         pass
 
-    # Try auto-generated captions
     try:
         transcripts    = YouTubeTranscriptApi.list_transcripts(video_id)
         transcript_obj = transcripts.find_generated_transcript(["en", "hi"])
@@ -157,7 +238,6 @@ def get_transcript(url: str) -> str:
     except Exception:
         pass
 
-    # Last resort — take any available transcript, translate to English
     try:
         transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
         for t in transcripts:
@@ -168,6 +248,90 @@ def get_transcript(url: str) -> str:
                 continue
     except Exception:
         pass
+
+    # ── Attempt 4: pytubefix fallback ─────────────────────────────────────
+    print(f"[youtube_processor] transcript_api failed — trying pytubefix fallback")
+    try:
+        from pytubefix import YouTube
+
+        yt      = YouTube(url)
+        caption = (
+            yt.captions.get("en")
+            or yt.captions.get("a.en")   # auto-generated English
+            or yt.captions.get("en-US")
+            or (list(yt.captions.values())[0] if yt.captions else None)
+        )
+
+        if caption:
+            try:
+                text = caption.generate_srt_captions()
+
+                # Guard — sometimes returns the object itself, not a string
+                if not isinstance(text, str):
+                    raise ValueError(f"generate_srt_captions returned non-string: {type(text)}")
+
+                # Strip SRT timestamps — keep only text lines
+                lines = []
+                for line in text.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.isdigit():
+                        continue
+                    if "-->" in line:
+                        continue
+                    lines.append(line)
+
+                result = " ".join(lines).strip()
+                if result:
+                    print(f"[youtube_processor] pytubefix transcript: {len(result.split())} words")
+                    return result
+
+            except Exception as cap_err:
+                print(f"[youtube_processor] Caption extraction failed: {cap_err}")
+
+                # Try other available captions before giving up
+                try:
+                    yt = YouTube(url)
+                    for code, cap in yt.captions.items():
+                        if code == caption.code:
+                            continue   # skip the one that failed
+                        try:
+                            text = cap.generate_srt_captions()
+                            if not isinstance(text, str):
+                                continue
+                            lines = [
+                                l.strip() for l in text.splitlines()
+                                if l.strip()
+                                and not l.strip().isdigit()
+                                and "-->" not in l
+                            ]
+                            result = " ".join(lines).strip()
+                            if result:
+                                print(f"[youtube_processor] pytubefix fallback caption [{code}]: {len(result.split())} words")
+                                return result
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+
+    except ImportError:
+        print("[youtube_processor] pytubefix not installed. Run: pip install pytubefix")
+    except Exception as e:
+        print(f"[youtube_processor] pytubefix fallback failed: {e}")
+
+    # ── Attempt 5: Whisper (shorts + reels only — downloads audio) ────────
+    # Only trigger for short-form content — too slow for full videos
+    _short_form = ("shorts/", "instagram.com/reel")
+    if any(s in url for s in _short_form):
+        print(f"[youtube_processor] All caption methods failed — trying Whisper")
+        whisper_text = _transcribe_with_whisper(
+            url,
+            source_type="youtube_shorts" if "shorts/" in url else "instagram_reel"
+        )
+        if whisper_text:
+            return whisper_text
 
     return ""
 
@@ -243,3 +407,4 @@ def process_youtube(url: str) -> dict:
         "transcript":   transcript,
         "top_comments": top_comments,
     }
+
