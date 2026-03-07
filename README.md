@@ -1,408 +1,183 @@
-# AI Resource Agent 🧠📚
+```markdown
+# 🤖 AI Resource Agent
 
-A **local AI-powered knowledge collector** that helps developers save, analyze, and organize learning resources from the internet.
-
-Instead of bookmarking links and never revisiting them, this agent **extracts meaningful knowledge from resources** such as:
-
-* YouTube videos
-* GitHub repositories
-* Articles / blogs
-* Screenshots / images
-* Instagram dev posts (planned)
-
-It processes the content locally and creates structured summaries that can be searched later.
-
-The goal is to build a **personal developer knowledge archive powered by local AI models.**
+A fully async, multi-source AI agent that accepts URLs, plain text, or images — automatically detects the source type, routes to the right processor, runs a clean → enrich → summarize LLM pipeline, and saves everything to a local database. Served via a FastAPI web interface.
 
 ---
 
-# 🚀 Motivation
+## ✨ Features
 
-Every day developers discover useful resources like:
-
-* GitHub projects
-* AI tools
-* tutorials
-* courses
-* dev articles
-* social media posts
-* YouTube videos
-
-Most of these get saved as **bookmarks or screenshots and are forgotten**.
-
-This project solves that problem by creating a **personal AI ingestion pipeline** that:
-
-1. Collects raw resources
-2. Extracts useful information
-3. Summarizes the content using local LLMs
-4. Stores the knowledge for future search
-
-Everything runs **locally** using models from **Ollama**.
+- **Multi-Source Input** — Paste a YouTube link, GitHub repo, Instagram post, web article, ArXiv paper, Hugging Face model, plain text, or a local image/file
+- **Smart Source Detection** — Two-stage detection: fast regex rules first, then an LLM classifier fallback for ambiguous inputs
+- **Async Pipeline** — Fully `async/await` throughout; no event-loop blocking
+- **Multi-Stage LLM Pipeline** — classify → extract guidance → clean → enrich → summarize
+- **Persistent Database** — Every processed resource is saved with vault metadata (title, snippet, source type, status)
+- **FastAPI Web UI** — Chat-style interface accessible from the browser
+- **CLI Mode** — Run `python main.py` for a terminal REPL
 
 ---
 
-# 🎯 Goals
-
-The system should:
-
-* Work **locally without cloud APIs**
-* Use **different LLMs for different tasks**
-* Extract **maximum information before sending to LLM** (token efficient)
-* Save **raw resources + processed knowledge**
-* Support **multiple resource types**
-
----
-
-# 📥 Supported Resource Types (Current / Planned)
-
-### Video
-
-* YouTube videos
-* YouTube Shorts
-* Instagram Reels
-
-Videos are **not analyzed visually**.
-
-Instead the agent extracts:
-
-* transcript
-* title
-* description
-* comments
-
----
-
-### GitHub Repositories
-
-The agent can:
-
-* clone repositories
-* read README
-* analyze project description
-* summarize project purpose
-
----
-
-### Web Articles
-
-The system can:
-
-* scrape article content
-* remove HTML clutter
-* summarize the content
-
----
-
-### Images / Screenshots
-
-Useful for:
-
-* dev roadmaps
-* diagrams
-* cheat sheets
-
-Pipeline:
-
-```
-image
-↓
-OCR (Tesseract)
-↓
-text extraction
-↓
-LLM summary
-```
-
----
-
-### Social Media Posts (Planned)
-
-Examples:
-
-* Instagram dev posts
-* Twitter threads
-* LinkedIn posts
-
-The agent will extract:
-
-* captions
-* hashtags
-* images
-* external links
-
----
-
-# 🧠 Core Idea
-
-Instead of building a **chatbot**, this project builds a **task-specific AI agent** whose only job is:
-
-> **Ingest developer resources and convert them into structured knowledge.**
-
-Pipeline:
-
-```
-Raw Resource
-↓
-Python Processing
-↓
-Content Extraction
-↓
-LLM Analysis
-↓
-Structured Knowledge
-↓
-Local Storage
-```
-
----
-
-# 🧩 Architecture
-
-The system separates **data processing** and **LLM reasoning**.
-
-```
-INPUT
-(link / image / notes)
-        ↓
-Source Detection
-        ↓
-Processor
-(YouTube / GitHub / Web / OCR)
-        ↓
-Clean Context
-        ↓
-LLM Analysis
-        ↓
-Structured Output
-        ↓
-Local Storage
-```
-
----
-
-# ⚙️ Technology Stack
-
-### AI
-
-* Ollama
-* Local LLM models (Mistral / Qwen / Llama)
-
-### Processing
-
-* Python
-* yt-dlp
-* youtube-transcript-api
-* trafilatura
-* pytesseract
-
-### Tools
-
-* Git
-* Tesseract OCR
-
----
-
-# 📁 Project Structure
+## 📁 Project Structure
 
 ```
 ai_resource_agent/
-
-main.py
-config.py
-
-processors/
-    youtube_processor.py
-    github_processor.py
-    web_processor.py
-    instagram_processor.py
-
-utils/
-    source_detector.py
-    downloader.py
-    transcript.py
-    ocr.py
-    cleaner.py
-
-llm/
-    summarizer.py
-    prompt_builder.py
-
-database/
-    db.py
-
-storage/
-    raw/
-    processed/
-    images/
-    videos/
-    repos/
+│
+├── main.py                  # Central async router & entry point
+├── config.py                # Configuration (env vars, constants)
+├── .env                     # API keys / secrets (not committed)
+│
+├── processors/
+│   ├── youtube_processor.py    # YouTube videos, shorts, playlists
+│   ├── github_processor.py     # GitHub repos, files, gists
+│   ├── web_processor.py        # General web, Medium, Substack, ArXiv, HuggingFace, Reddit, etc.
+│   ├── instagram_processor.py  # Instagram posts & reels
+│   ├── text_processor.py       # Plain text / pasted content
+│   └── image_processor.py      # Local images with OCR
+│
+├── llm/
+│   ├── pipeline.py             # classify(), extract_guidance(), enrich()
+│   ├── summarizer.py           # summarize_data(), call_llm()
+│   ├── prompt_builder.py       # Source-specific prompt construction
+│   ├── llm_classifier.py       # LLM-based source type classifier
+│   ├── ollama_client.py        # Ollama local LLM client
+│   └── embeddings.py           # Embedding utilities
+│
+├── utils/
+│   ├── source_detector.py      # Regex-based source detection (Stage 1)
+│   └── cleaner.py              # Cleans & normalises processor output dicts
+│
+├── database/
+│   └── db.py                   # SQLite init, save_resource(), queries
+│
+└── web/
+    ├── app.py                  # FastAPI app — /chat endpoint + static serving
+    ├── templates/              # Jinja2 HTML templates
+    └── static/                 # CSS / JS assets
 ```
 
 ---
 
-# 🔄 Processing Pipeline
-
-Example for YouTube:
+## 🔄 How It Works
 
 ```
-YouTube link
-↓
-extract video ID
-↓
-fetch transcript
-↓
-send transcript to LLM
-↓
-generate summary
-↓
-store results
-```
-
-Example for GitHub:
-
-```
-GitHub repo
-↓
-clone repository
-↓
-read README
-↓
-summarize project
-```
-
-Example for images:
-
-```
-image
-↓
-OCR extraction
-↓
-text cleaning
-↓
-LLM summary
+User Input (URL / text / image)
+        │
+        ▼
+  Stage 1: Rule-based source detection  (utils/source_detector.py)
+        │
+        ▼ (ambiguous? → Stage 2)
+  Stage 2: LLM classifier fallback      (llm/llm_classifier.py)
+        │
+        ▼
+  Route to Processor
+  ┌─────────────────────────────────────────────┐
+  │  YouTube · GitHub · Web · Instagram         │
+  │  Text · Image (OCR)                         │
+  └─────────────────────────────────────────────┘
+        │
+        ▼
+  Stage 3: extract_guidance()  →  clean()  →  enrich()
+        │
+        ▼
+  Stage 4: summarize_data()  via  call_llm()
+        │
+        ▼
+  Save to SQLite DB  +  Return LLM output to user
 ```
 
 ---
 
-# 📦 Installation
+## 🌐 Supported Sources
 
-### 1. Install Python dependencies
+| Category | Sources |
+|---|---|
+| **Video** | YouTube videos, shorts, playlists |
+| **Code** | GitHub repos, files, gists |
+| **Social** | Instagram posts, reels, Reddit posts/subreddits |
+| **Articles** | Medium, Substack, Notion pages, ArXiv papers |
+| **AI/ML** | HuggingFace models, datasets, spaces |
+| **Web** | Any general webpage, Pastebin, Loom, Vimeo |
+| **Files** | PDF (URL or local), images, plain text, code files, notebooks |
+| **Text** | Pasted plain text or notes |
 
-```
-pip install yt-dlp youtube-transcript-api trafilatura pytesseract pillow requests
-```
-
----
-
-### 2. Install Ollama
-
-https://ollama.com
-
-Pull a model:
-
-```
-ollama pull mistral
-```
-
-Start server:
-
-```
-ollama serve
-```
+> ⚠️ **Not supported:** LinkedIn profiles/company pages (login-protected). Paste the content text directly instead.
 
 ---
 
-### 3. Install Git
+## 🚀 Getting Started
 
+### Prerequisites
+
+- Python 3.10+
+- [Ollama](https://ollama.ai/) running locally (or configure another LLM backend)
+
+### Installation
+
+```bash
+git clone https://github.com/adityaksx/ai_resource_agent.git
+cd ai_resource_agent
+pip install -r requirements.txt
 ```
-winget install Git.Git
+
+### Configuration
+
+Create a `.env` file in the project root:
+
+```env
+OLLAMA_MODEL=llama3
+# add any other keys required by processors
 ```
 
----
+### Run (Web UI)
 
-### 4. Install Tesseract OCR
-
-```
-winget install UB-Mannheim.TesseractOCR
+```bash
+uvicorn web.app:app --reload
 ```
 
----
+Then open [http://localhost:8000](http://localhost:8000) in your browser.
 
-# ▶️ Running the Agent
+### Run (CLI)
 
-```
+```bash
 python main.py
 ```
 
-Paste a resource link:
+Paste any URL, text, or a local file/image path at the prompt. Type `exit` to quit.
 
+---
+
+## 🧩 Key Modules
+
+### `main.py`
+The central async router. Accepts any combination of URLs + text + image paths, detects source types, delegates to the right processor, runs the full pipeline, saves to DB, and returns the final LLM output.
+
+### `llm/pipeline.py`
+Implements the multi-stage async pipeline:
+- `classify(input)` — identifies the content type
+- `extract_guidance(input, source_type)` — pulls focus hints for the summarizer
+- `enrich(cleaned_data, guidance)` — augments data with context before summarization
+
+### `llm/prompt_builder.py`
+Constructs source-specific prompts. Each source type (YouTube, GitHub, ArXiv, etc.) gets a tailored prompt structure for the best LLM output.
+
+### `processors/`
+Each processor extracts raw structured data from its source and returns a normalized dict. The `web_processor.py` handles the broadest range of URLs including ArXiv, HuggingFace, Reddit, and generic sites.
+
+### `database/db.py`
+SQLite-backed storage. Saves every resource with `vault_title`, `vault_snippet`, `source`, `status`, `raw_input`, `raw_data`, `cleaned_data`, and `llm_output`.
+
+---
+
+## 🛠️ Architecture Notes
+
+- **No blocking I/O** — all network calls and LLM calls use `async/await`
+- **Separation of concerns** — routing, prompting, cleaning, and DB operations are in separate modules
+- **Graceful error handling** — friendly messages for JS-only sites, 404s, timeouts, and login-protected pages
+- **Mixed input** — sending multiple URLs + text in one request is supported; the agent processes each independently then synthesizes a combined insight
+
+---
+
+## 📄 License
+
+This project is open source. See [LICENSE](LICENSE) for details.
 ```
-https://youtube.com/...
-https://github.com/...
-https://blog.example.com/article
-```
-
-The agent will:
-
-1. detect source
-2. extract content
-3. summarize with LLM
-4. display results
-
----
-
-# 🔮 Future Improvements
-
-Planned upgrades:
-
-### Knowledge Database
-
-Store summaries in searchable database.
-
-### Vector Search
-
-Allow semantic search of saved resources.
-
-### Automatic Tagging
-
-Detect technologies automatically.
-
-### Instagram Integration
-
-Download dev posts and reels.
-
-### Resource Scoring
-
-Evaluate usefulness of resources.
-
-### Knowledge Graph
-
-Connect related resources automatically.
-
----
-
-# 🧠 Vision
-
-The long-term goal is to build a **personal AI knowledge system** for developers.
-
-Instead of collecting random bookmarks, the system builds a **structured learning archive** that grows smarter over time.
-
-Eventually it will allow queries like:
-
-* "Show AI agent tutorials I saved"
-* "Find Docker courses"
-* "List GitHub repos about RAG"
-
----
-
-# 📜 License
-
-MIT License
-
----
-
-# 🤝 Contributions
-
-Ideas, improvements, and suggestions are welcome.
-
-This project is an experiment toward building **local AI-powered developer tools**.
