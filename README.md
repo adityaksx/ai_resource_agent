@@ -1,95 +1,119 @@
 # 🤖 AI Resource Agent
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-Async-green)
-![LLM](https://img.shields.io/badge/LLM-Ollama-orange)
-![Database](https://img.shields.io/badge/Database-SQLite-lightgrey)
-![License](https://img.shields.io/badge/License-MIT-purple)
+> Turn any URL, text, or file into structured AI knowledge.
 
-> **Turn any link, text, or image into structured AI knowledge.**
+AI Resource Agent is a **fully async multi-source ingestion system** that accepts links, text, and images, detects their type automatically, extracts useful information, enriches it using an LLM, and stores everything in a local knowledge database.
 
-AI Resource Agent is an **async multi-source intelligence pipeline** that accepts URLs, text, or files — automatically detects their type, extracts useful data, enriches it using an LLM, and stores everything in a searchable resource vault.
-
-It acts like a **personal AI knowledge ingestion engine**.
+Think of it as a **personal AI-powered resource vault**.
 
 ---
 
-# ✨ What Makes It Cool
+## ✨ Features
 
-🧠 **Smart Input Understanding**
+### 🧠 Multi-Source Input
 Paste almost anything:
 
-* YouTube video
-* GitHub repository
-* Research paper
-* Blog article
-* Instagram post
-* Local image or file
-* Plain text notes
+- YouTube videos / playlists
+- GitHub repositories / files / gists
+- Blog posts & articles
+- Instagram posts
+- Research papers (ArXiv)
+- HuggingFace models
+- Local images or files
+- Plain text notes
 
-The agent **figures out what it is automatically.**
+The agent **automatically detects the source type**.
 
 ---
 
-⚡ **Async End-to-End Pipeline**
+### ⚡ Async Processing Pipeline
 
-No blocking calls. Everything runs with `async/await`:
+End-to-end asynchronous architecture.
 
 ```
 detect → extract → clean → enrich → summarize → store
 ```
 
-Fast and scalable.
+No blocking I/O. Everything runs with `async/await`.
 
 ---
 
-🧩 **Modular Architecture**
+### 🔎 Smart Source Detection
 
-Each content type has its own processor:
+Two-stage detection system:
+
+1. **Fast rule-based detection** using regex  
+2. **LLM fallback classifier** for ambiguous inputs
+
+This keeps detection both **fast and intelligent**.
+
+---
+
+### 🧩 Modular Processors
+
+Each source type has its own processor.
 
 ```
-YouTube → youtube_processor
-GitHub → github_processor
-Web → web_processor
-Image → OCR pipeline
-Text → text processor
+processors/
+├── youtube_processor.py
+├── github_processor.py
+├── web_processor.py
+├── instagram_processor.py
+├── text_processor.py
+└── image_processor.py
 ```
 
 Easy to extend with new sources.
 
 ---
 
-🗄 **Local Knowledge Vault**
+### 🗄 Persistent Knowledge Vault
 
-Every processed resource is stored in SQLite with:
+Every processed resource is saved in **SQLite** with structured metadata.
 
-* title
-* summary
-* source type
-* cleaned data
-* enriched LLM insights
+Stored fields include:
 
-Your personal **AI knowledge database**.
+- title
+- snippet
+- source type
+- raw extracted data
+- cleaned data
+- LLM summary
+- processing status
+
+This becomes your **personal AI knowledge database**.
 
 ---
 
-🌐 **Two Ways to Use It**
+### 🌐 Web Interface + CLI
+
+Two ways to use the agent.
 
 **Web Interface**
 
+FastAPI-based chat UI.
+
 ```
-FastAPI chat interface
+uvicorn web.app:app --reload
 ```
 
-Paste links and instantly get structured insights.
+Open:
+
+```
+http://localhost:8000
+```
+
+---
 
 **CLI Mode**
+
+Run the terminal interface:
 
 ```
 python main.py
 ```
 
-Simple terminal REPL.
+Paste URLs, text, or file paths directly.
 
 ---
 
@@ -100,25 +124,29 @@ User Input
 (URL / Text / Image)
         │
         ▼
-┌───────────────────────────────┐
-│ Source Detection              │
-│ 1️⃣ Regex rules               │
-│ 2️⃣ LLM fallback classifier   │
-└───────────────────────────────┘
+Source Detection
+│
+├─ Stage 1: Regex Rules
+└─ Stage 2: LLM Classifier
         │
         ▼
-┌───────────────────────────────┐
-│ Source Processor              │
-│ YouTube | GitHub | Web        │
-│ Instagram | Text | Image OCR  │
-└───────────────────────────────┘
+Source Processor
+│
+├─ YouTube
+├─ GitHub
+├─ Web
+├─ Instagram
+├─ Text
+└─ Image (OCR)
         │
         ▼
-┌───────────────────────────────┐
-│ LLM Processing Pipeline       │
-│ classify → clean → enrich     │
-│ summarize                     │
-└───────────────────────────────┘
+LLM Processing Pipeline
+│
+├─ classify()
+├─ extract_guidance()
+├─ clean()
+├─ enrich()
+└─ summarize()
         │
         ▼
 SQLite Database
@@ -131,32 +159,32 @@ Web UI / CLI Output
 
 # 🌍 Supported Sources
 
-| Category    | Supported                         |
-| ----------- | --------------------------------- |
-| 🎥 Video    | YouTube videos, shorts, playlists |
-| 💻 Code     | GitHub repos, files, gists        |
-| 📱 Social   | Instagram posts, Reddit           |
-| 📰 Articles | Medium, Substack, Notion          |
-| 📚 Research | ArXiv papers                      |
-| 🤖 AI Tools | HuggingFace models & datasets     |
-| 🌐 Web      | Any webpage                       |
-| 📂 Files    | Images, PDFs, notebooks           |
-| 📝 Text     | Plain text notes                  |
+| Category | Examples |
+|--------|--------|
+| Video | YouTube videos, playlists |
+| Code | GitHub repositories, files, gists |
+| Social | Instagram posts, Reddit |
+| Articles | Medium, Substack, blogs |
+| Research | ArXiv papers |
+| AI | HuggingFace models & datasets |
+| Web | Any webpage |
+| Files | PDFs, images, notebooks |
+| Text | Plain text notes |
 
-⚠️ Login-protected sources (LinkedIn etc.) are not supported — paste the text instead.
+⚠ Login-protected platforms (LinkedIn etc.) are not supported.
 
 ---
 
-# 📂 Project Structure
+# 📁 Project Structure
 
 ```
-ai_resource_agent
+ai_resource_agent/
 │
-├── main.py                # Entry point & async router
-├── config.py              # Configuration
-├── .env                   # API keys
+├── main.py
+├── config.py
+├── .env
 │
-├── processors/            # Source processors
+├── processors/
 │   ├── youtube_processor.py
 │   ├── github_processor.py
 │   ├── web_processor.py
@@ -164,7 +192,7 @@ ai_resource_agent
 │   ├── text_processor.py
 │   └── image_processor.py
 │
-├── llm/                   # LLM pipeline
+├── llm/
 │   ├── pipeline.py
 │   ├── summarizer.py
 │   ├── prompt_builder.py
@@ -189,40 +217,42 @@ ai_resource_agent
 
 # 🚀 Getting Started
 
-## 1️⃣ Clone Repo
+## 1. Clone the Repository
 
-```bash
+```
 git clone https://github.com/adityaksx/ai_resource_agent.git
 cd ai_resource_agent
 ```
 
 ---
 
-## 2️⃣ Install Dependencies
+## 2. Install Dependencies
 
-```bash
+```
 pip install -r requirements.txt
 ```
 
 ---
 
-## 3️⃣ Setup Environment
+## 3. Setup Environment Variables
 
-Create `.env`
+Create a `.env` file:
 
 ```
 OLLAMA_MODEL=llama3
 ```
 
+Add any other API keys required by processors.
+
 ---
 
-## 4️⃣ Run Web Interface
+## 4. Run Web Interface
 
-```bash
+```
 uvicorn web.app:app --reload
 ```
 
-Open:
+Then open:
 
 ```
 http://localhost:8000
@@ -230,39 +260,39 @@ http://localhost:8000
 
 ---
 
-## 5️⃣ Run CLI
+## 5. Run CLI Mode
 
 ```
 python main.py
 ```
 
-Paste any:
+Type any:
 
-* URL
-* text
-* file path
-* image
+- URL
+- text
+- image path
+- file path
 
----
-
-# 🧩 Key Components
-
-## `main.py`
-
-Central async router.
-
-Responsibilities:
-
-* detect input type
-* call correct processor
-* run LLM pipeline
-* save results to database
+Type `exit` to quit.
 
 ---
 
-## `llm/pipeline.py`
+# 🧩 Key Modules
 
-Core LLM workflow.
+### `main.py`
+
+Central async router that:
+
+- detects input type  
+- routes to processor  
+- runs the LLM pipeline  
+- saves results to the database  
+
+---
+
+### `llm/pipeline.py`
+
+Implements the AI processing pipeline:
 
 ```
 classify()
@@ -274,9 +304,15 @@ summarize()
 
 ---
 
-## `processors/`
+### `llm/prompt_builder.py`
 
-Extract raw data from sources.
+Builds **source-specific prompts** for better LLM responses.
+
+---
+
+### `processors/`
+
+Each processor extracts structured data from its source.
 
 Examples:
 
@@ -289,51 +325,29 @@ image_processor → OCR text
 
 ---
 
-## `database/db.py`
+### `database/db.py`
 
-SQLite resource vault.
-
-Stores:
-
-```
-vault_title
-vault_snippet
-source
-raw_data
-cleaned_data
-llm_output
-status
-```
+Handles SQLite storage and resource queries.
 
 ---
 
-# 🛠 Design Philosophy
+# 🛠 Design Principles
 
-✔ Fully async architecture
-✔ Modular processors
-✔ Local-first AI workflow
-✔ Extendable source support
-✔ Structured knowledge storage
-
----
-
-# 🧪 Example Use Cases
-
-• Build a **personal AI research vault**
-• Save and summarize **GitHub repos instantly**
-• Extract knowledge from **YouTube tutorials**
-• Organize **AI/ML resources automatically**
-• Create your own **AI knowledge ingestion system**
+- Fully async architecture
+- Modular processors
+- Clean separation of concerns
+- Local-first AI workflow
+- Easy extensibility
 
 ---
 
-# 🔮 Future Ideas
+# 💡 Example Use Cases
 
-* Vector search over stored resources
-* RAG chat over your vault
-* Browser extension for one-click ingestion
-* Semantic clustering of resources
-* Automatic tagging
+• Personal AI research vault  
+• Automatic GitHub repo summarization  
+• Knowledge extraction from YouTube tutorials  
+• Organizing AI/ML resources  
+• Building your own AI knowledge ingestion system  
 
 ---
 
@@ -347,7 +361,5 @@ MIT License
 
 **Aditya Kumar**
 
-Building tools around **AI agents, automation, and knowledge systems.**
-
-GitHub
-[https://github.com/adityaksx](https://github.com/adityaksx)
+GitHub  
+https://github.com/adityaksx
