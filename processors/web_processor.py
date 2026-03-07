@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import urllib3
 import requests
 import trafilatura
+import io
 from trafilatura.settings import use_config
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -340,21 +341,90 @@ async def fetch_with_fallback(url: str) -> dict | None:
 # MAIN PROCESSOR
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _is_pdf_url(url: str) -> bool:
+    """Check if URL points to a PDF file."""
+    url_lower = url.lower().split("?")[0]   # ignore query params
+    return url_lower.endswith(".pdf")
+
+
+def _fetch_pdf(url: str) -> dict | None:
+    """
+    Download and extract text from a PDF URL using pypdf2.
+    Returns dict with title and content, or None on failure.
+    """
+    try:
+        import PyPDF2
+
+        print(f"[web_processor] Detected PDF URL, downloading...")
+        r = requests.get(url, headers=BROWSER_HEADERS, timeout=30, stream=True)
+        r.raise_for_status()
+
+        # Safety check — don't download huge PDFs
+        content_length = int(r.headers.get("Content-Length", 0))
+        if content_length > 20 * 1024 * 1024:   # 20 MB limit
+            print(f"[web_processor] PDF too large ({content_length} bytes), skipping")
+            return None
+
+        pdf_bytes = io.BytesIO(r.content)
+        reader    = PyPDF2.PdfReader(pdf_bytes)
+
+        # Extract title from PDF metadata
+        title = ""
+        if reader.metadata:
+            title = reader.metadata.get("/Title", "") or ""
+        if not title:
+            # fallback — use filename from URL
+            title = url.split("/")[-1].replace(".pdf", "").replace("-", " ").replace("_", " ")
+
+        # Extract text from all pages
+        pages = []
+        for i, page in enumerate(reader.pages):
+            if i >= 50:   # cap at 50 pages to avoid huge context
+                print(f"[web_processor] PDF: capping at 50 pages")
+                break
+            try:
+                text = page.extract_text()
+                if text and text.strip():
+                    pages.append(text.strip())
+            except Exception:
+                continue
+
+        full_text = "\n\n".join(pages)
+        if not full_text.strip():
+            print(f"[web_processor] PDF: no text extracted (likely scanned image PDF)")
+            return None
+
+        print(f"[web_processor] PDF: extracted {len(full_text.split())} words from {len(reader.pages)} pages")
+        return {"title": title, "text": full_text}
+
+    except ImportError:
+        print("[web_processor] PyPDF2 not installed. Run: pip install pypdf2")
+        return None
+    except Exception as e:
+        print(f"[web_processor] PDF fetch failed: {e}")
+        return None
+
+
 async def process_web(url: str) -> dict | None:
+
+    # ── PDF URL — bypass HTML strategies entirely ─────────────────────────
+    if _is_pdf_url(url):
+        result = _fetch_pdf(url)
+        if not result:
+            return None
+        content = clean_text(result["text"])
+        truncated = False
+        if len(content) > MAX_CONTENT_CHARS:
+            content   = content[:MAX_CONTENT_CHARS]
+            truncated = True
+        return {
+            "url":       url,
+            "title":     result["title"],
+            "content":   content,
+            "source_type": "pdf_document",   # override source type
+        }
+
     result = await fetch_with_fallback(url)                # ← await
 
     if not result:
         return None
-
-    content = clean_text(result["text"])
-
-    truncated = False
-    if len(content) > MAX_CONTENT_CHARS:
-        content   = content[:MAX_CONTENT_CHARS]
-        truncated = True
-
-    return {
-        "url":        url,
-        "title":      result["title"],
-        "content":    content,
-    }
