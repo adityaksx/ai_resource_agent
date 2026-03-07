@@ -4,6 +4,8 @@
 // Each item: { type, label, url?, file?, dataUrl? }
 let attachments = [];
 let chatHistory = JSON.parse(localStorage.getItem('chatHistory') || '[]');
+let currentSessionTitle = null; 
+let currentChatSessionId = Date.now();
 
 // =====================================================
 // INIT
@@ -143,10 +145,13 @@ async function send() {
         if (a.type === 'image') displayParts.push('📎 ' + a.label);
         else displayParts.push(getIcon(a.type) + ' ' + a.url);
     });
-    addMessage('user', displayParts.join('\n'), attachments.filter(a => a.type === 'image'));
-    saveToHistory(displayParts[0].slice(0, 60));
 
-    // Build FormData: text + all URLs concatenated, plus image files
+    const historyTitle = displayParts[0].slice(0, 60);  // ← capture title early
+
+    addMessage('user', displayParts.join('\n'), attachments.filter(a => a.type === 'image'));
+    // ← REMOVED saveToHistory() from here
+
+    // Build FormData
     const formData = new FormData();
     const urlLines = attachments.filter(a => a.type !== 'image').map(a => a.url);
     const fullText = [text, ...urlLines].filter(Boolean).join('\n');
@@ -154,6 +159,7 @@ async function send() {
     attachments.filter(a => a.type === 'image').forEach(a => {
         formData.append('images', a.file, a.file.name);
     });
+    formData.append('session_id', currentChatSessionId); 
 
     // Clear state
     inputEl.value = '';
@@ -169,9 +175,11 @@ async function send() {
         const data = await res.json();
         loadingWrapper.closest('.message-wrapper').remove();
         addMessage('bot', data.response || 'No response.');
+        saveToHistory(historyTitle);   // ← MOVED HERE: saved after bot reply
     } catch (err) {
         loadingWrapper.closest('.message-wrapper').remove();
         addMessage('bot', '⚠️ Error: ' + err.message);
+        saveToHistory(historyTitle);   // ← also save on error
     }
 }
 
@@ -254,10 +262,21 @@ function handleKey(e) {
 }
 
 function newThread() {
-    document.getElementById('messages').innerHTML = `
+    const messages = document.getElementById('messages');
+    const hasContent = !messages.querySelector('#welcome-screen');
+    if (hasContent) {
+        const firstUserMsg = messages.querySelector('.message-user p');
+        const title = firstUserMsg?.textContent?.slice(0, 60) || 'Untitled thread';
+        saveToHistory(title);
+    }
+
+    currentSessionTitle = null;
+    currentChatSessionId = Date.now();   // ← RESET session for new thread
+
+    messages.innerHTML = `
         <div id="welcome-screen" class="welcome-screen">
             <h1>Where knowledge begins</h1>
-            <p>Mix images, YouTube links, GitHub repos, Instagram posts — all in one message</p>
+            <p>Mix images, YouTube Links, GitHub repos, Instagram posts — all in one message</p>
         </div>`;
     document.getElementById('user-input').value = '';
     attachments = [];
@@ -265,19 +284,77 @@ function newThread() {
 }
 
 function saveToHistory(title) {
-    chatHistory.unshift({ title, date: new Date().toISOString() });
+    const messages = document.getElementById('messages');
+
+    const clone = messages.cloneNode(true);
+    clone.querySelectorAll('img.user-img-thumb').forEach(img => {
+        img.src = '';
+        img.alt = '[image]';
+    });
+    const snapshot = clone.innerHTML;
+
+    // Set session title on first message of this thread
+    if (!currentSessionTitle) {
+        currentSessionTitle = title;
+    }
+
+    // Always update the CURRENT session entry (not by title match)
+    const existingIdx = chatHistory.findIndex(h => h.sessionTitle === currentSessionTitle);
+
+    if (existingIdx !== -1) {
+        chatHistory[existingIdx].html = snapshot;   // ← update existing
+    } else {
+        chatHistory.unshift({
+            title:        currentSessionTitle,
+            sessionTitle: currentSessionTitle,       // ← unique key for this session
+            date:         new Date().toISOString(),
+            html:         snapshot
+        });
+    }
+
     if (chatHistory.length > 30) chatHistory.pop();
-    localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+
+    try {
+        localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+    } catch(e) {
+        console.warn('History save failed (storage full):', e);
+    }
+
     renderHistory();
 }
+
 
 function renderHistory() {
     const list = document.getElementById('history-list');
     list.innerHTML = '';
-    chatHistory.slice(0, 20).forEach(item => {
+    chatHistory.slice(0, 20).forEach((item, idx) => {
         const li = document.createElement('li');
         li.textContent = item.title;
         li.title = item.title;
+        li.addEventListener('click', () => loadThread(idx));   // ← ADD THIS
         list.appendChild(li);
     });
 }
+
+function loadThread(idx) {
+    const item = chatHistory[idx];
+    console.log('[LOAD] idx:', idx, 'item:', item);
+    if (!item || !item.html) return;
+
+    // Highlight selected thread in sidebar
+    document.querySelectorAll('.history-list li').forEach((li, i) => {
+        li.style.background = i === idx ? '#252727' : '';
+        li.style.color      = i === idx ? '#e8e8e6' : '';
+    });
+
+    const messages = document.getElementById('messages');
+    messages.innerHTML = item.html;
+    console.log('[LOAD] restored html length:', item.html.length);
+    messages.scrollTop = messages.scrollHeight;
+
+    attachments = [];
+    renderAttachments();
+    document.getElementById('user-input').value = '';
+    autoResize(document.getElementById('user-input'));
+}
+
