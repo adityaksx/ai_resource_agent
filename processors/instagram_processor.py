@@ -272,12 +272,11 @@ def process_instagram(url: str) -> dict | None:
     raw_comments = get_instagram_comments(url)
     top_comments = get_top_comments(raw_comments, max_count=10)
 
+    is_reel = "/reel/" in url
     return {
-        "source_type": "instagram_post",
+        "source_type": "instagram_reel" if is_reel else "instagram_post",
         "url":         url,
         "title":       data.get("title",    ""),
         "caption":     clean_text(data.get("caption",   "")),
-        "uploader":    data.get("uploader", ""),
-        "likes":       data.get("likes"),
         "top_comments": top_comments,
     }
