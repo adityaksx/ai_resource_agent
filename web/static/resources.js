@@ -2,6 +2,8 @@ let allItems   = [];
 let activeFilter = 'all';
 let currentView  = 'grid';
 let pendingDelId = null;
+let currentModalId = null; 
+let _originalAnswer  = ''; 
 
 /* ── Source helpers ─────────────────────────────── */
 const ICONS = {
@@ -92,10 +94,8 @@ function setView(v) {
 
 /* ── Render ─────────────────────────────────────── */
 function render() {
-
   const q = document.getElementById('searchInput').value.toLowerCase();
-
-  let items = [...allItems].sort((a,b)=>b.id-a.id);
+  let items = [...allItems].sort((a, b) => b.id - a.id);
 
   if (activeFilter !== 'all')
     items = items.filter(i => filterKey(i.source) === activeFilter);
@@ -117,144 +117,179 @@ function render() {
     return;
   }
 
-  /* -------- GROUP BY SESSION -------- */
-
-  const sessions = {};
+  // ── Build groups ──────────────────────────────────
+  const groups     = new Map();   // sessionId → [items]
+  const renderedIds = new Set();
 
   items.forEach(item => {
-    const sid = item.session_id || item.id;
-    if (!sessions[sid]) sessions[sid] = [];
-    sessions[sid].push(item);
+    const sid = item.session_id;
+    if (sid) {
+      if (!groups.has(sid)) groups.set(sid, []);
+      groups.get(sid).push(item);
+    }
   });
 
-  const cards = [];
+  // ── Build unified list of render-units ───────────
+  // Each unit: { type: 'folder'|'solo', date, data }
+  const units = [];
 
-  Object.values(sessions).forEach(sessionItems => {
+  groups.forEach((groupItems, sid) => {
+    if (groupItems.length < 2) return;
+    // Use newest item's created_at as folder date
+    const newest = groupItems[0];
+    units.push({
+      type:   'folder',
+      date:   newest.created_at,
+      sid,
+      items:  groupItems,
+      newest,
+    });
+    groupItems.forEach(i => renderedIds.add(i.id));
+  });
 
-    /* ---------- SESSION FOLDER ---------- */
+  items.forEach(item => {
+    if (renderedIds.has(item.id)) return;
+    units.push({
+      type: 'solo',
+      date: item.created_at,
+      item,
+    });
+  });
 
-    if (sessionItems.length > 1) {
+  // ── Sort all units newest → oldest ───────────────
+  units.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-      const sid = sessionItems[0].session_id;
-      const preview = sessionItems
-        .slice(0,2)
-        .map(i => esc(i.vault_title || i.title || i.url))
-        .join('<br>');
+  // ── Render with sequential display numbers ────────
+  const isGrid = currentView === 'grid';
+  const cards  = units.map((unit, idx) => {
+    const displayNum = units.length - idx;   // 1-based sequential number
 
-      cards.push(`
-        <div class="card" onclick="openSessionPopup(${sid})">
-
+    if (unit.type === 'folder') {
+      const { sid, items: groupItems, newest } = unit;
+      return `
+        <div class="card folder-card" onclick="openSessionPopup(${sid})">
           <div class="card-header">
-            <div class="card-icon">📁</div>
-
+            <div class="card-icon folder-icon">📁</div>
             <div class="card-meta">
-              <div class="card-num">SESSION</div>
-              <div class="card-title">${sessionItems.length} items</div>
+              <div class="card-num">#${displayNum} · ${groupItems.length} items</div>
+              <div class="card-title">${esc(newest.vault_title || newest.title || 'Session')}</div>
+              ${!isGrid ? `<span class="card-date">${fmt(newest.created_at)}</span>` : ''}
             </div>
-
-            <span class="card-badge badge-default">group</span>
+            <span class="card-badge badge-session">Folder</span>
+            <button class="card-del" title="Delete folder"
+              onclick="askDelFolder(event, ${sid})">🗑</button>
           </div>
-
-          <div class="card-snippet">
-            ${preview}
-          </div>
-
-        </div>
-      `);
-
-    } else {
-
-      /* ---------- NORMAL CARD ---------- */
-
-      const item = sessionItems[0];
-
-      const num         = allItems.length - allItems.indexOf(item);
-      const src         = item.source || 'unknown';
-      const cardTitle   = item.vault_title || item.title || item.url || 'Untitled';
-      const cardSnippet = item.vault_snippet || (item.llm_output||'').slice(0,160);
-      const isGrid      = currentView === 'grid';
-
-      cards.push(`
-        <div class="card" data-id="${item.id}" onclick="openModal(${item.id})">
-
-          <div class="card-header">
-
-            <div class="card-icon">${icon(src)}</div>
-
-            <div class="card-meta">
-              <div class="card-num">#${num}</div>
-              <div class="card-title">${esc(cardTitle)}</div>
-              ${!isGrid ? `<span class="card-date">${fmt(item.created_at)}</span>` : ''}
-            </div>
-
-            <span class="card-badge ${badgeClass(src)}">${src.replace(/_/g,' ')}</span>
-
-            <button class="card-del"
-              title="Delete"
-              onclick="askDel(event,${item.id})">🗑</button>
-
-          </div>
-
-          ${isGrid && cardSnippet
-            ? `<div class="card-snippet">${esc(cardSnippet)}…</div>`
-            : ''}
-
           ${isGrid ? `
+          <div class="folder-thumbs">
+            ${groupItems.slice(0,4).map(i =>
+              `<div class="folder-thumb-item">${icon(i.source||'unknown')}</div>`
+            ).join('')}
+            ${groupItems.length > 4
+              ? `<div class="folder-thumb-item folder-more">+${groupItems.length - 4}</div>`
+              : ''}
+          </div>
           <div class="card-footer">
-            <span>
-              <span class="status-dot ${item.status==='error'
-                ? 'status-error'
-                : 'status-success'}"></span>
-              ${item.status||'processed'}
-            </span>
-            <span>${fmt(item.created_at)}</span>
+            <span>📁 ${groupItems.length} resources</span>
+            <span>${fmt(newest.created_at)}</span>
           </div>` : ''}
-
-        </div>
-      `);
-
+        </div>`;
     }
 
+    // solo card
+    const { item } = unit;
+    const src         = item.source || 'unknown';
+    const cardTitle   = item.vault_title || item.title || item.url || 'Untitled';
+    const cardSnippet = item.vault_snippet || (item.llm_output || '').slice(0, 160);
+
+    return `
+      <div class="card" data-id="${item.id}" onclick="openModal(${item.id})">
+        <div class="card-header">
+          <div class="card-icon">${icon(src)}</div>
+          <div class="card-meta">
+            <div class="card-num">#${displayNum}</div>
+            <div class="card-title">${esc(cardTitle)}</div>
+            ${!isGrid ? `<span class="card-date">${fmt(item.created_at)}</span>` : ''}
+          </div>
+          <span class="card-badge ${badgeClass(src)}">${src.replace(/_/g,' ')}</span>
+          <button class="card-del" title="Delete" onclick="askDel(event,${item.id})">🗑</button>
+        </div>
+        ${isGrid && cardSnippet
+          ? `<div class="card-snippet">${esc(cardSnippet)}…</div>` : ''}
+        ${isGrid ? `
+        <div class="card-footer">
+          <span>
+            <span class="status-dot ${item.status==='error'
+              ? 'status-error' : 'status-success'}"></span>
+            ${item.status || 'processed'}
+          </span>
+          <span>${fmt(item.created_at)}</span>
+        </div>` : ''}
+      </div>`;
   });
 
   wrap.innerHTML = cards.join('');
-
 }
 
-function openSessionPopup(sessionId){
 
-  const items = allItems.filter(i => i.session_id == sessionId);
+function openSessionPopup(sessionId) {
+  const items = allItems
+    .filter(i => i.session_id == sessionId)
+    .sort((a,b) => b.id - a.id);
 
   const html = items.map(i => {
-
-    const title = esc(i.vault_title || i.title || i.url);
-    const src   = i.source || 'unknown';
-
+    const src     = i.source || 'unknown';
+    const title   = esc(i.vault_title || i.title || i.url || 'Untitled');
+    const snippet = esc((i.vault_snippet || '').slice(0, 80));
     return `
       <div class="session-item" onclick="openModal(${i.id})">
         <div class="session-icon">${icon(src)}</div>
-        <div class="session-title">${title}</div>
-      </div>
-    `;
-
+        <div class="session-info">
+          <div class="session-title">${title}</div>
+          ${snippet ? `<div class="session-snippet">${snippet}…</div>` : ''}
+        </div>
+        <span class="card-badge ${badgeClass(src)}" style="margin-left:auto;flex-shrink:0">
+          ${src.replace(/_/g,' ')}
+        </span>
+        <button class="session-del" title="Delete"
+          onclick="event.stopPropagation(); askDel(event, ${i.id})">🗑</button>
+      </div>`;
   }).join('');
 
-  document.getElementById("mTitle").textContent =
-    `Session (${items.length} items)`;
+  document.getElementById('mIcon').textContent  = '📁';
+  document.getElementById('mTitle').textContent = `Session — ${items.length} items`;
+  document.getElementById('mBadge').textContent = 'Folder';
+  document.getElementById('mBadge').className   = 'card-badge badge-session';
+  document.getElementById('mDate').textContent  = items.length ? fmt(items[0].created_at) : '';
 
-  document.getElementById("tab-raw").innerHTML =
+  document.getElementById('tab-raw').innerHTML =
     `<div class="session-list">${html}</div>`;
+  document.getElementById('tab-answer').innerHTML =
+    '<div class="llm-answer" style="color:var(--muted)">No answer for session view.</div>';
 
-  document.getElementById("tab-answer").innerHTML = "";
+  document.querySelectorAll('.tab').forEach((t,i)      => t.classList.toggle('active', i===0));
+  document.querySelectorAll('.tab-panel').forEach((p,i) => p.classList.toggle('show',  i===0));
 
-  document.getElementById("overlay").classList.add("show");
+  document.getElementById('overlay').classList.add('show');
 }
+
 
 /* ── Modal popup ────────────────────────────────────── */
 async function openModal(id) {
-  const r    = await fetch(`/api/resources/${id}`);
-  const item = await r.json();
-  const src  = item.source || 'unknown';
+
+  // ── Change 4: error handling ──────────────────────
+  let item;
+  try {
+    const r = await fetch(`/api/resources/${id}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    item = await r.json();
+    currentModalId = item.id;
+  } catch(e) {
+    alert(`Could not load resource: ${e.message}`);
+    return;
+  }
+  // ─────────────────────────────────────────────────
+
+  const src = item.source || 'unknown';
 
   document.getElementById('mIcon').textContent  = icon(src);
   document.getElementById('mTitle').textContent = item.vault_title || item.title || item.url || 'Untitled';
@@ -325,14 +360,17 @@ async function openModal(id) {
   document.getElementById('tab-raw').innerHTML =
     rawHtml || '<div class="raw-block" style="color:var(--muted)">No raw input stored.</div>';
 
-  const ans = item.llm_output || (item.error ? `⚠️ Error: ${item.error}` : 'No answer recorded.');
+  // ── Change 2: esc(item.error) to prevent XSS ─────
+  const ans = item.llm_output || (item.error ? `⚠️ Error: ${esc(item.error)}` : 'No answer recorded.');
   document.getElementById('tab-answer').innerHTML = `<div class="llm-answer">${esc(ans)}</div>`;
+  // ─────────────────────────────────────────────────
 
-  document.querySelectorAll('.tab').forEach((t,i)      => t.classList.toggle('active', i===0));
-  document.querySelectorAll('.tab-panel').forEach((p,i) => p.classList.toggle('show',  i===0));
+  document.querySelectorAll('.tab').forEach((t,i)       => t.classList.toggle('active', i===0));
+  document.querySelectorAll('.tab-panel').forEach((p,i)  => p.classList.toggle('show',  i===0));
 
   document.getElementById('overlay').classList.add('show');
 }
+
 
 function maybeClose(e) {
   if (e.target === document.getElementById('overlay')) closeModal();
@@ -353,23 +391,111 @@ function askDel(e, id) {
   pendingDelId = id;
   document.getElementById('delConfirm').style.display = 'flex';
 }
+
+function askDelFolder(e, sessionId) {
+  e.stopPropagation();
+  const groupItems = allItems.filter(i => i.session_id == sessionId);
+  if (!groupItems.length) return;
+
+  // Reuse del-confirm but store all IDs
+  pendingDelId = groupItems.map(i => i.id);   // array of IDs
+  document.getElementById('delConfirm').style.display = 'flex';
+}
+
 function cancelDel() {
   pendingDelId = null;
   document.getElementById('delConfirm').style.display = 'none';
 }
 async function confirmDel() {
-  if (!pendingDelId) return;
+  if (pendingDelId === null) return;
+
+  const ids = Array.isArray(pendingDelId) ? pendingDelId : [pendingDelId];
+
   try {
-    await fetch(`/api/resources/${pendingDelId}`, { method: 'DELETE' });
-    allItems = allItems.filter(i => i.id !== pendingDelId);
+    await Promise.all(ids.map(id =>
+      fetch(`/api/resources/${id}`, { method: 'DELETE' })
+    ));
+    allItems = allItems.filter(i => !ids.includes(i.id));
     computeStats();
     render();
+    closeModal();
   } catch(e) { alert('Delete failed: ' + e.message); }
   cancelDel();
 }
+
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { closeModal(); cancelDel(); }
 });
 
+
+function toggleEditAnswer() {
+  const panel    = document.getElementById('tab-answer');
+  const btn      = document.getElementById('editAnswerBtn');
+  const existing = panel.querySelector('.llm-answer');
+
+  if (panel.querySelector('.llm-edit-area')) return;  // already editing
+
+  _originalAnswer = existing ? existing.textContent : '';
+
+  panel.innerHTML = `
+    <textarea class="llm-edit-area" id="llmEditTextarea">${esc(_originalAnswer)}</textarea>
+    <div class="llm-edit-actions">
+      <button class="btn-cancel-answer" onclick="cancelEditAnswer()">Cancel</button>
+      <button class="btn-save-answer"   onclick="saveAnswer()">💾 Save</button>
+    </div>`;
+
+  btn.textContent = '✏️ Editing…';
+  btn.disabled    = true;
+
+  // Switch to answer tab
+  document.querySelectorAll('.tab').forEach((t,i)      => t.classList.toggle('active', i===1));
+  document.querySelectorAll('.tab-panel').forEach((p,i) => p.classList.toggle('show',   i===1));
+}
+
+function cancelEditAnswer() {
+  document.getElementById('tab-answer').innerHTML =
+    `<div class="llm-answer">${esc(_originalAnswer)}</div>`;
+  const btn = document.getElementById('editAnswerBtn');
+  btn.textContent = '✏️ Edit';
+  btn.disabled    = false;
+}
+
+
+async function saveAnswer() {
+  const textarea = document.getElementById('llmEditTextarea');
+  if (!textarea || currentModalId === null) return;
+
+  const newText = textarea.value;
+
+  try {
+    const res = await fetch(`/api/resources/${currentModalId}/answer`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ llm_output: newText }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    // Update in-memory allItems
+    const item = allItems.find(i => i.id === currentModalId);
+    if (item) item.llm_output = newText;
+
+    document.getElementById('tab-answer').innerHTML =
+      `<div class="llm-answer">${esc(newText)}</div>`;
+    const btn = document.getElementById('editAnswerBtn');
+    btn.textContent = '✏️ Edit';
+    btn.disabled    = false;
+
+  } catch(e) {
+    alert('Save failed: ' + e.message);
+  }
+}
+
+
 loadResources();
+// auto refresh vault every 5 seconds
+setInterval(() => {
+  const modalOpen = document.getElementById('overlay').classList.contains('show');
+  const searching = document.getElementById('searchInput').value.trim() !== '';
+  if (!modalOpen && !searching) loadResources();
+}, 5000);
