@@ -15,6 +15,7 @@ Handles:
 import os
 import sys
 import shutil
+import time
 from pathlib import Path
 from typing import Optional, List
 
@@ -131,9 +132,17 @@ def api_delete_resource(resource_id: int):
 
 @app.post("/chat")
 async def chat(
-    message: Optional[str]              = Form(default=None),
-    images:  Optional[List[UploadFile]] = File(default=None),
+    message:    Optional[str]              = Form(default=None),
+    images:     Optional[List[UploadFile]] = File(default=None),
+    session_id: Optional[str]              = Form(default=None),   # ← ADD
 ):
+    # Use session ID from frontend (same thread = same ID), fallback to new one
+    try:
+        sid = int(session_id) if session_id else int(time.time() * 1000)
+    except (ValueError, TypeError):
+        sid = int(time.time() * 1000)
+    print(f"[DEBUG] session_id from frontend: {session_id}, using sid: {sid}") 
+
     results = []
 
     if message and message.strip():
@@ -146,17 +155,15 @@ async def chat(
 
         for url in urls:
             try:
-                result = await process_link(url)
-                if result:
-                    results.append(result)
+                result = await process_link(url, session_id=sid)
+                if result: results.append(result)
             except Exception as e:
                 results.append(f"Error processing '{url}': {e}")
 
         if plain_str:
             try:
-                result = await process_text_input(plain_str)
-                if result:
-                    results.append(result)
+                result = await process_text_input(plain_str, session_id=sid)
+                if result: results.append(result)
             except Exception as e:
                 results.append(f"Error processing text: {e}")
 
@@ -170,9 +177,11 @@ async def chat(
                 save_path = IMAGES_DIR / safe_name
                 with open(save_path, "wb") as f:
                     shutil.copyfileobj(img.file, f)
-                result = await process_image_input(str(save_path.resolve()))
-                if result:
-                    results.append(result)
+                result = await process_image_input(
+                    str(save_path.resolve()),
+                    session_id=sid   # ← use sid
+                )
+                if result: results.append(result)
             except Exception as e:
                 results.append(f"Error processing image '{img.filename}': {e}")
 
@@ -180,3 +189,12 @@ async def chat(
         return {"response": "Nothing to process. Please provide a link, text, or image."}
 
     return {"response": "\n\n---\n\n".join(str(r) for r in results)}
+
+@app.patch("/api/resources/{resource_id}/answer")
+async def api_update_answer(resource_id: int, payload: dict):
+    row = get_resource(resource_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    from database.db import update_resource_answer
+    update_resource_answer(resource_id, payload.get("llm_output", ""))
+    return {"ok": True}
