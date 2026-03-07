@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 BASE_DIR   = Path(__file__).parent
 ROOT_DIR   = BASE_DIR.parent
 IMAGES_DIR = ROOT_DIR / "storage" / "images"
+PDFS_DIR   = ROOT_DIR / "storage" / "pdfs"
 
 sys.path.insert(0, str(ROOT_DIR))
 
@@ -46,6 +47,7 @@ app.mount(
 async def startup():
     init_db()
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    PDFS_DIR.mkdir(parents=True, exist_ok=True)
     app.mount(
         "/storage/images",
         StaticFiles(directory=str(IMAGES_DIR)),
@@ -174,16 +176,26 @@ async def chat(
                 continue
             try:
                 safe_name = img.filename.strip().replace(" ", "_")
-                save_path = IMAGES_DIR / safe_name
+                if safe_name.lower().endswith(".pdf"):
+                    save_path = PDFS_DIR / safe_name        # ← save PDFs separately
+                else:
+                    save_path = IMAGES_DIR / safe_name
                 with open(save_path, "wb") as f:
                     shutil.copyfileobj(img.file, f)
-                result = await process_image_input(
-                    str(save_path.resolve()),
-                    session_id=sid   # ← use sid
-                )
+
+                resolved = str(save_path.resolve())
+
+                # ── Route PDFs to process_local_file, not process_image_input
+                if safe_name.lower().endswith(".pdf"):
+                    from main import process_local_file
+                    result = await process_local_file(resolved)
+                else:
+                    result = await process_image_input(resolved, session_id=sid)
+
                 if result: results.append(result)
             except Exception as e:
-                results.append(f"Error processing image '{img.filename}': {e}")
+                results.append(f"Error processing '{img.filename}': {e}")
+
 
     if not results:
         return {"response": "Nothing to process. Please provide a link, text, or image."}
