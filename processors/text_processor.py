@@ -194,9 +194,6 @@ def process_text(text: str, source_type: str = "") -> dict:
           source_type  : str
           content      : str  (the full original text)
           title        : str  (extracted meaningful title)
-          char_count   : int
-          word_count   : int
-          line_count   : int
 
         Keys added by type:
           language     : str  (code_snippet only)
@@ -218,7 +215,8 @@ def process_text(text: str, source_type: str = "") -> dict:
     # Normalise: detect_source on a URL would return "web" — keep as plain_text
     _TEXT_TYPES = {
         "plain_text", "code_snippet", "markdown",
-        "json_data", "news_headline", "unknown",
+        "json_data", "news_headline","notebook",
+        "unknown",
     }
     if source_type not in _TEXT_TYPES:
         source_type = "plain_text"
@@ -228,9 +226,6 @@ def process_text(text: str, source_type: str = "") -> dict:
         "source_type": source_type,
         "content":     text,
         "title":       _extract_title(text, source_type),
-        "char_count":  len(text),
-        "word_count":  len(text.split()),
-        "line_count":  len(text.splitlines()),
     }
 
     # ── Type-specific enrichment ──────────────────────────────────────────
@@ -240,6 +235,8 @@ def process_text(text: str, source_type: str = "") -> dict:
 
     elif source_type == "json_data":
         json_fields = _parse_json_content(text)
+        if "content" in json_fields and len(json_fields["content"]) > 3000:
+            json_fields["content"] = json_fields["content"][:3000] + "\n...[truncated]"
         result.update(json_fields)    # adds description + keeps content
 
     elif source_type == "markdown":
