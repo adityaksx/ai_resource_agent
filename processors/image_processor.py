@@ -44,6 +44,4 @@ def process_image(image_path: str) -> dict:
         "source_type": "local_image",
         "title":       title,
         "ocr_text":    ocr_text,
-        "image_path":  image_path,
-        "filename":    filename,
     }
